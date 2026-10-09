@@ -4,6 +4,10 @@
   Mobile-first: the base rules are for phones, and the media
   queries near the bottom add to them for wider screens.
   Colours live in the :root block so they can be changed in one place.
+
+  After editing this file, bump the ?v= number in each page's
+  <link rel="stylesheet" href="curtismiller.css?v=..."> line so browsers
+  fetch the new version instead of a cached copy.
 */
 
 /* ---------- Font: EB Garamond, self-hosted (regular and italic files) ---------- */
