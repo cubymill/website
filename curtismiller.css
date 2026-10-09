@@ -6,14 +6,22 @@
   Colours live in the :root block so they can be changed in one place.
 */
 
-/* ---------- Font (self-hosted, one file covers every weight) ---------- */
+/* ---------- Font: EB Garamond, self-hosted (regular and italic files) ---------- */
 
 @font-face {
-  font-family: "Manrope";
+  font-family: "EB Garamond";
   font-style: normal;
-  font-weight: 200 800;
+  font-weight: 400 800;
   font-display: swap;
-  src: url("fonts/manrope.woff2") format("woff2");
+  src: url("fonts/eb-garamond.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "EB Garamond";
+  font-style: italic;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url("fonts/eb-garamond-italic.woff2") format("woff2");
 }
 
 /* ---------- Colours ---------- */
@@ -54,9 +62,9 @@ body {
   padding: 0 1rem 3rem;
   background: var(--bg);
   color: var(--text);
-  font-family: "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  font-size: 1rem;
-  line-height: 1.6;
+  font-family: "EB Garamond", Garamond, "Times New Roman", Georgia, serif;
+  font-size: 1.15rem;
+  line-height: 1.55;
 }
 
 a {
@@ -84,7 +92,7 @@ img {
 h1,
 h2 {
   color: var(--accent);
-  font-weight: 600;
+  font-weight: 500;
   line-height: 1.25;
 }
 
@@ -94,8 +102,8 @@ h1 {
 }
 
 h2 {
-  font-size: 0.8rem;
-  letter-spacing: 0.08em;
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   margin: 2.5rem 0 0.75rem;
 }
@@ -119,8 +127,8 @@ p {
 
 .site-name {
   color: var(--accent);
-  font-weight: 600;
-  font-size: 1.1rem;
+  font-weight: 500;
+  font-size: 1.3rem;
   letter-spacing: 0.02em;
 }
 
@@ -280,7 +288,7 @@ main {
 
 @media (min-width: 1024px) {
   body {
-    font-size: 1.0625rem;
+    font-size: 1.25rem;
   }
 
   h1 {
