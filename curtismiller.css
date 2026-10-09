@@ -193,6 +193,38 @@ main {
   color: var(--muted);
 }
 
+/* ---------- CV: year column beside each entry ---------- */
+
+.cv {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr;
+  gap: 0 1rem;
+  margin: 0;
+  line-height: 1.35;
+}
+
+.cv dt {
+  color: var(--muted);
+}
+
+.cv dd {
+  margin: 0 0 0.6rem;
+}
+
+.detail-list {
+  margin-top: 0.3rem;
+}
+
+.detail {
+  display: block;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.detail-list li {
+  margin-bottom: 0.4rem;
+}
+
 /* ---------- Image stacks (film pages, photo series) ---------- */
 
 .stack {
