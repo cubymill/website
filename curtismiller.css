@@ -1,239 +1,309 @@
-/*media queries*/
-/*anything greather than >>> a break point - min - */
-/*anything less than a <<<< break point - max*/
+/*
+  Curtis Miller - site stylesheet
 
-/***********MOBILE***********/
-/***********MOBILE***********/
+  Mobile-first: the base rules are for phones, and the media
+  queries near the bottom add to them for wider screens.
+  Colours live in the :root block so they can be changed in one place.
+*/
 
-header{
-    background-color: white;
-    width: 100%;
-    margin: auto;
-    text-align: center;
-    bottom: 10px;
-    z-index: 10;
-    height: 20px;
-    font-size: 15px;
-    font-weight: 300;
+/* ---------- Font (self-hosted, one file covers every weight) ---------- */
+
+@font-face {
+  font-family: "Manrope";
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url("fonts/manrope.woff2") format("woff2");
 }
 
-footer{
-    text-align: right;
-}
-    
-body{
-    background: white; 
-    font-family: 'Manrope', sans-serif;
-    margin-left: 2vw;
-    margin-right: 1vw;
-    margin-bottom: 5vh;
-    margin-top: 15%;
-    z-index: 50;
-    
+/* ---------- Colours ---------- */
+
+:root {
+  --bg: #fff;
+  --text: #111;
+  --muted: #666;
+  --accent: #c00;   /* the site red; darker than pure red so small text stays readable */
+  --rule: #e5e5e5;
 }
 
-h1{
-    color: red;
-    font-size: 18px;
-    word-spacing: 10px;
-    font-weight: 600;
-    text-align: center;
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111;
+    --text: #e8e8e8;
+    --muted: #999;
+    --accent: #ff5a5a;
+    --rule: #2a2a2a;
+  }
 }
 
-h2{
-    color:red;
-    font-size:18px;
-    text-align: center;
-    margin-bottom: 4vh;
+/* ---------- Base ---------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-h3{color:black;
-text-align: center;
-    font-size: 13px;
-    display: inline;
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
-h2:hover{color:black}
-h2:active{color:red}
-
-
-p{
-    color:black;
-    font-size: 12px
+body {
+  margin: 0;
+  padding: 0 1rem 3rem;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
 }
 
-hr {
-  width: 100%;
-  margin-right: auto;
+a {
+  color: inherit;
+  text-decoration: none;
 }
 
-img{max-width: 100%;
-    height: auto;
-    margin-left: auto;
-    margin-right: auto;
-align-content: center;}
+a:hover,
+a:focus {
+  color: var(--accent);
+}
 
-.center{
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+img {
   display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+
+h1,
+h2 {
+  color: var(--accent);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin: 0 0 0.25rem;
+}
+
+h2 {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 2.5rem 0 0.75rem;
+}
+
+p {
+  margin: 0 0 1rem;
+}
+
+/* ---------- Header and navigation ---------- */
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  max-width: 60rem;
+  margin: 0 auto;
+  padding: 1.25rem 0 2rem;
+}
+
+.site-name {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+.site-nav {
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.site-nav a + a::before {
+  content: "/";
+  margin: 0 0.6em;
+  color: var(--muted);
+}
+
+.site-nav a[aria-current="page"] {
+  color: var(--accent);
+}
+
+/* ---------- Page content ---------- */
+
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+/* Comfortable reading width for paragraphs and lists */
+.text {
+  max-width: 38rem;
+  margin: 0 auto;
+}
+
+.meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.lead-image {
+  margin: 0 auto 2.5rem;
+}
+
+/* Lists without bullets: screenings, press, links */
+.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.plain li {
+  margin-bottom: 0.35rem;
+}
+
+.plain .source,
+.plain .date {
+  color: var(--muted);
+}
+
+/* ---------- Image stacks (film pages, photo series) ---------- */
+
+.stack {
+  margin: 1.5rem 0 2rem;
+}
+
+.stack img {
+  margin-bottom: 1rem;
+}
+
+/* Keep tall images within the screen height */
+.stack img,
+.lead-image {
+  max-height: 85vh;
+  width: auto;
+}
+
+/* ---------- Films grid ---------- */
+
+.film-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2rem 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.film-grid a {
+  display: block;
+}
+
+.film-grid img {
+  width: 100%;
+}
+
+.film-grid .title {
+  display: block;
+  margin-top: 0.5rem;
+  font-weight: 500;
+}
+
+.film-grid .meta {
+  display: block;
+}
+
+.film-grid a:hover img,
+.film-grid a:focus img {
+  opacity: 0.85;
+}
+
+/* ---------- Photo series ---------- */
+
+.series {
+  margin-bottom: 4rem;
+}
+
+.series h2 {
+  max-width: 38rem;
   margin-left: auto;
   margin-right: auto;
-    ;
 }
 
-
-
-#container{
-  display:flex;
+.series .year {
+  color: var(--muted);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
 }
 
+/* ---------- Footer ---------- */
 
-
-a{ text-decoration: none;
-    color:black;
-}
-a:hover{color:red}
-
-ul{list-style-position: outside;}
-
-li{list-style-position: outside;}
-
-iframe{
-    align-content: center;
-    display: block;
+.back {
+  margin-top: 3rem;
 }
 
-
-
-/***********MOBILE***********/
-/***********MOBILE***********/
-
-
-
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
-
-
-/***********TABLET***********/
-/***********TABLET***********/
-@media only screen and (min-width: 768px){
-    h1{
-    font-size: 30px;
-        text-align: center;
-   }
-    
-    h2{
-    color:red;
-    font-size:20px;
-    text-align: center;
-    margin-bottom: 4vh;
-}
-    
-    p{
-    color:black;
-    font-size: 16px;
-    text-align: left;
-    font-weight: 300;
-}
-    .newspaper{
-    color:red;
-    column-count: 2}
-
+.site-footer {
+  max-width: 60rem;
+  margin: 4rem auto 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 0.8rem;
 }
 
-#container{
-  display:flex
+/* ---------- Tablet and up ---------- */
+
+@media (min-width: 640px) {
+  body {
+    padding: 0 2rem 4rem;
+  }
+
+  .film-grid {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
-/***********TABLET***********/
-/***********TABLET***********/
+/* ---------- Desktop ---------- */
 
+@media (min-width: 1024px) {
+  body {
+    font-size: 1.0625rem;
+  }
 
+  h1 {
+    font-size: 1.9rem;
+  }
 
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
+  .film-grid {
+    grid-template-columns: 1fr 1fr 1fr;
+  }
 
-
-/***********SMALL_LAPTOP***********/
-/***********SMALL_LAPTOP***********/
-@media only screen and (min-width: 992px){
-     h1{ color:red;
-        font-size: 35px;
-        }
-    
-    h2{
-    font-size:30px;
-    text-align: center;
-    margin-bottom: 4vh;
-    }
-
-  h3{font-size:18px;}  
-    }
-
-p{max-width: 100%}
-
- img{max-width: 100%;
-    height: auto;
-    margin-left: auto;
-    margin-right: auto;
-align-content: center;}
-
-hr{max-width: 100%}
-
-
-/***********SMALL_LAPTOP***********/
-/***********SMALL_LAPTOP***********/
-
-
-
-/*
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-*/
-
-
-
-/***********LG_DESK***********/
-/***********LG_DESK***********/
-@media only screen and (min-width: 1080px){
-    body{margin-top:5%;
-        margin-left:;
-        margin-right;}
-    
-    h1{
-        color:red;
-    font-size: 35px;
-   }
-    p{font-size: 13px;
-    max-width: 30%;
-        display: block;
-    align-content: center;}
-
-    h3{font-size: 14px;
-        font-weight: 300;
-    max-width: 30%}
-    
-    img{max-width: 30%;
-    height: auto;
-    margin-left: auto;
-    margin-right: auto;
-align-content: center;}
+  .site-header {
+    padding: 2rem 0 3rem;
+  }
 }
 
-iframe{
-    max-width: 100%;
-    width: 108wh;
-    height: 50vh;
-    border: none;
-    align-content: center;
+/* ---------- Print ---------- */
+
+@media print {
+  .site-nav,
+  .back {
+    display: none;
+  }
+
+  a {
+    text-decoration: underline;
+  }
 }
-
-hr{max-width: 30%}
-
-/***********LG_DESK***********/
-/***********LG_DESK***********/
-
-
