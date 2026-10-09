@@ -170,7 +170,8 @@ main {
 }
 
 .plain li {
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.15rem;
+  line-height: 1.35;
 }
 
 .plain .source,
