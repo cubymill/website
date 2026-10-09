@@ -32,6 +32,9 @@
   --muted: #666;
   --accent: #c00;   /* the site red; darker than pure red so small text stays readable */
   --rule: #e5e5e5;
+
+  --page-width: 48rem;  /* overall width of header, images, footer */
+  --text-width: 34rem;  /* reading width for paragraphs and lists */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -120,7 +123,7 @@ p {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem 1.5rem;
-  max-width: 60rem;
+  max-width: var(--page-width);
   margin: 0 auto;
   padding: 1.25rem 0 2rem;
 }
@@ -151,13 +154,13 @@ p {
 /* ---------- Page content ---------- */
 
 main {
-  max-width: 60rem;
+  max-width: var(--page-width);
   margin: 0 auto;
 }
 
 /* Comfortable reading width for paragraphs and lists */
 .text {
-  max-width: 38rem;
+  max-width: var(--text-width);
   margin: 0 auto;
 }
 
@@ -245,7 +248,7 @@ main {
 }
 
 .series h2 {
-  max-width: 38rem;
+  max-width: var(--text-width);
   margin-left: auto;
   margin-right: auto;
 }
@@ -264,7 +267,7 @@ main {
 }
 
 .site-footer {
-  max-width: 60rem;
+  max-width: var(--page-width);
   margin: 4rem auto 0;
   padding-top: 1rem;
   border-top: 1px solid var(--rule);
