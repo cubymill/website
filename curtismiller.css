@@ -33,8 +33,7 @@
   --accent: #c00;   /* the site red; darker than pure red so small text stays readable */
   --rule: #e5e5e5;
 
-  --page-width: 48rem;  /* overall width of header, images, footer */
-  --text-width: 34rem;  /* reading width for paragraphs and lists */
+  --column: 34rem;  /* width of the single page column: header, images, text, footer */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -123,7 +122,7 @@ p {
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem 1.5rem;
-  max-width: var(--page-width);
+  max-width: var(--column);
   margin: 0 auto;
   padding: 1.25rem 0 2rem;
 }
@@ -154,13 +153,13 @@ p {
 /* ---------- Page content ---------- */
 
 main {
-  max-width: var(--page-width);
+  max-width: var(--column);
   margin: 0 auto;
 }
 
 /* Comfortable reading width for paragraphs and lists */
 .text {
-  max-width: var(--text-width);
+  max-width: var(--column);
   margin: 0 auto;
 }
 
@@ -200,11 +199,10 @@ main {
   margin-bottom: 1rem;
 }
 
-/* Keep tall images within the screen height */
+/* Images fill the column so their edges line up with the text */
 .stack img,
 .lead-image {
-  max-height: 85vh;
-  width: auto;
+  width: 100%;
 }
 
 /* ---------- Films grid ---------- */
@@ -230,6 +228,7 @@ main {
   display: block;
   margin-top: 0.5rem;
   font-weight: 500;
+  line-height: 1.3;
 }
 
 .film-grid .meta {
@@ -248,7 +247,7 @@ main {
 }
 
 .series h2 {
-  max-width: var(--text-width);
+  max-width: var(--column);
   margin-left: auto;
   margin-right: auto;
 }
@@ -267,7 +266,7 @@ main {
 }
 
 .site-footer {
-  max-width: var(--page-width);
+  max-width: var(--column);
   margin: 4rem auto 0;
   padding-top: 1rem;
   border-top: 1px solid var(--rule);
@@ -296,10 +295,6 @@ main {
 
   h1 {
     font-size: 1.9rem;
-  }
-
-  .film-grid {
-    grid-template-columns: 1fr 1fr 1fr;
   }
 
   .site-header {
