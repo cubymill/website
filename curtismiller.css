@@ -193,6 +193,11 @@ main {
   color: var(--muted);
 }
 
+.more {
+  margin: 0.5rem 0 0;
+  font-size: 0.9em;
+}
+
 /* ---------- CV: year column beside each entry ---------- */
 
 .cv {
@@ -233,6 +238,12 @@ main {
 
 .stack img {
   margin-bottom: 1rem;
+}
+
+/* Clicking a photo opens it full size */
+.zoom {
+  display: block;
+  cursor: zoom-in;
 }
 
 /* Images fill the column so their edges line up with the text */
@@ -309,6 +320,10 @@ main {
   border-top: 1px solid var(--rule);
   color: var(--muted);
   font-size: 0.8rem;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0.25rem 1rem;
 }
 
 /* ---------- Tablet and up ---------- */
