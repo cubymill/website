@@ -276,6 +276,7 @@
     else if (state === 'play') takePhoto();
     else if (state === 'paused') togglePause();
     else if (state === 'dialog') advanceDialog();
+    else if (state === 'over' && performance.now() - game.overAt > 1000) startGame();
   }
 
   function togglePause() {
@@ -290,14 +291,14 @@
 
   function newGame() {
     return {
-      t: 0, score: 0, film: FILM, photos: [],
+      t: 0, score: 0, film: FILM, frames: 0,
       car: { x: 0, vx: 0, hp: 100, dir: 1, hurt: 0, wheel: 0 },
       camX: -W / 2,
       tor: null, nextTor: 1.5,
       hail: [], debris: [], dust: [],
       flash: 0, lightning: 0, lightningCd: rand(3, 7), bolt: null,
       shutterCd: 0, msg: '', msgT: 0, shake: 0,
-      pendingShot: null, ending: 0, endReason: '', hailSound: 0,
+      overAt: 0, ending: 0, endReason: '', hailSound: 0,
       zoom: 1, aimX: W / 2, dialog: null, dialogDelay: 0, dialogQuote: null, usedQuotes: new Set(),
     };
   }
@@ -305,7 +306,6 @@
   function startGame() {
     game = newGame();
     state = 'play';
-    sheet.style.display = 'none';
     flashMsg('Storms are firing. Go find a tornado.');
   }
 
@@ -315,7 +315,7 @@
     state = 'over';
     if (game.score > best) { best = game.score; saveBest(best); }
     sfx.over();
-    showContactSheet();
+    game.overAt = performance.now();
   }
 
   function flashMsg(text, time = 2.4) {
@@ -544,13 +544,13 @@
 
     const T = game.tor;
     const z = game.zoom;
-    let points = 0, label = 'Empty sky', short = 'Empty sky.', tag = 'empty';
+    let points = 0, short = 'Empty sky.', tag = 'empty';
     if (T && T.alpha > 0.25) {
       const gx = tornadoGroundX(T);
       const zx = screenXOf(gx);
       const phaseName = { forming: 'funnel', mature: 'tornado', roping: 'rope-out' }[T.phase];
       if (zx < -30 || zx > W + 30) {
-        label = short = 'Missed it. Out of frame.';
+        short = 'Missed it. Out of frame.';
         tag = 'miss';
       } else {
         const d = Math.abs(game.car.x - gx);
@@ -560,11 +560,9 @@
         const phaseMult = T.phase === 'forming' ? 0.6 : T.phase === 'roping' ? 1.4 : 1;
         const reach = tornadoReach(T);
         points = Math.round(100 * closeness * framing * (1 + T.ef * 0.4) * phaseMult * T.alpha * (0.4 + 0.6 * reach));
-        label = `EF${T.ef} ${phaseName}, ${(d * MI_PER_PX).toFixed(1)} mi`;
-        if (z > 1.05) label += `, ${z.toFixed(1)}x zoom`;
         short = `EF${T.ef} ${phaseName}`;
-        if (game.lightning > 0) { points += 40; label += ' + lightning'; short += ' + bolt'; }
-        if (points < 15) { label = `Too far. ${label}`; short = 'Too far.'; }
+        if (game.lightning > 0) { points += 40; short += ' + bolt'; }
+        if (points < 15) short = 'Too far.';
         tag = game.lightning > 0 ? 'lightning'
           : game.car.hp < 40 ? 'hurt'
           : d < 170 ? 'close'
@@ -578,18 +576,10 @@
     sfx.score(points);
     flashMsg(points > 0 ? `+${points}  ${short}` : short, 1.8);
     const quote = pickQuote(tag);
-    game.pendingShot = { points, label, quote, frame: FILM - game.film };
+    game.frames++;
     game.dialogQuote = quote;
     game.dialogDelay = 0.7;
     if (game.film === 0) game.ending = 1.6;
-  }
-
-  function captureShot() {
-    const s = game.pendingShot;
-    game.pendingShot = null;
-    let src = '';
-    try { src = canvas.toDataURL('image/png'); } catch (e) { /* ignore */ }
-    game.photos.push({ ...s, src });
   }
 
   // ---------------------------------------------------------------- update
@@ -842,9 +832,6 @@
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     posterize();
 
-    // The photo is captured before the HUD and flash are drawn.
-    if (g.pendingShot) captureShot();
-
     if (g.flash > 0) {
       ctx.fillStyle = `rgba(255,255,255,${g.flash * 0.85})`;
       ctx.fillRect(0, 0, SW, SH);
@@ -855,7 +842,12 @@
     if (state === 'dialog' && g.dialog) drawDialog(g.dialog);
     if (state === 'title') drawTitle();
     if (state === 'paused') drawCenter('PAUSED', 'Press P or tap to resume');
-    if (state === 'over') drawCenter(g.endReason, `Score ${g.score}. Your contact sheet is below.`);
+    if (state === 'over') {
+      drawCenter(g.endReason, `${g.frames} frames exposed. Score ${g.score}. Best ${best}.`);
+      if (performance.now() - g.overAt > 1000 && Math.floor(performance.now() / 500) % 2) {
+        text('PRESS SPACE OR TAP TO CHASE AGAIN', SW / 2, SH / 2 + 26, { align: 'center', color: '#ffe680' });
+      }
+    }
   }
 
   // Reduce to a 4-bit-per-channel palette for that banded console look.
@@ -1003,44 +995,122 @@
     ctx.stroke();
   }
 
+  // The lower edge of a cloud tier: straight facets between random points,
+  // a slow swell, and the odd hanging tooth of scud.
+  function raggedEdge(wx, seed, depth) {
+    const step = 26;
+    const i = Math.floor(wx / step), f = wx / step - i;
+    let y = lerp(hash(i * 7.3 + seed), hash((i + 1) * 7.3 + seed), f);
+    const swell = 0.55 + 0.45 * Math.sin(wx * 0.0041 + seed * 5) * Math.sin(wx * 0.0013 + seed);
+    const ti = Math.floor(wx / 90), tf = wx / 90 - ti;
+    const tooth = hash(ti * 3.1 + seed * 2);
+    if (tooth > 0.6) y += (1 - Math.abs(2 * tf - 1)) * 1.8 * (tooth - 0.6) / 0.4;
+    return (y * swell + Math.sin(wx * 0.0023 + seed) * 0.4) * depth;
+  }
+
   function drawStormCloud(cam, T) {
-    // Solid band across the top, then a row of shaded puffs for the base.
+    // Dark mass behind everything
     const band = ctx.createLinearGradient(0, 0, 0, CLOUD_BASE);
     band.addColorStop(0, col('cloudTop'));
     band.addColorStop(1, col('cloudBase'));
     ctx.fillStyle = band;
-    ctx.fillRect(-20, -20, W + 40, CLOUD_BASE - 18);
+    ctx.fillRect(-W, -H, W * 3, H + CLOUD_BASE - 40);
 
-    // Soft highlights near the top of the storm.
-    const hpar = 0.3, hstep = 110;
-    let first = Math.floor((cam * hpar - 80) / hstep);
-    ctx.globalAlpha = 0.45;
-    for (let i = first; i < first + W / hstep + 3; i++) {
-      const sx = i * hstep - cam * hpar;
-      puff(sx, 24 + hash(i + 50) * 22, 40 + hash(i + 60) * 20, col('cloudLight'), col('cloudTop'), col('cloudTop', 0));
-    }
-    ctx.globalAlpha = 1;
-
-    const par = 0.5, step = 48;
-    first = Math.floor((cam * par - 80) / step);
-    for (let i = first; i < first + W / step + 4; i++) {
-      const sx = i * step - cam * par;
-      const y = CLOUD_BASE - 26 + hash(i) * 14;
-      const r = 30 + hash(i + 7) * 16;
-      puff(sx, y, r, col('cloudTop'), col('cloudBase'), col('cloudShade'));
+    // Angular light facets in the upper storm
+    const fpar = 0.2, fstep = 150;
+    let first = Math.floor((cam * fpar - 200) / fstep);
+    for (let i = first; i < first + W / fstep + 4; i++) {
+      const sx = i * fstep - cam * fpar + hash(i + 11) * 60;
+      const h = hash(i + 21);
+      ctx.fillStyle = col('cloudLight', 0.12 + h * 0.16);
+      ctx.beginPath();
+      ctx.moveTo(sx, 4 + h * 18);
+      ctx.lineTo(sx + 70 + h * 60, 16 + hash(i + 31) * 24);
+      ctx.lineTo(sx + 30 + h * 30, 44 + h * 20);
+      ctx.lineTo(sx - 20, 30);
+      ctx.closePath();
+      ctx.fill();
     }
 
-    // Lowered wall cloud above the tornado.
+    // Stacked shelf tiers: pale, sunlit ledges low down, the heavy dark mass
+    // on top. Drawn back to front so each ledge shows beneath the one above.
+    const tiers = [
+      { par: 0.62, y: CLOUD_BASE - 26, depth: 28, seed: 1, fill: col('cloudTop'), rim: col('sun', 0.55) },
+      { par: 0.45, y: CLOUD_BASE - 52, depth: 30, seed: 2, fill: col('cloudBase'), rim: col('cloudLight', 0.4) },
+      { par: 0.3, y: CLOUD_BASE - 80, depth: 34, seed: 3, fill: col('cloudShade'), rim: col('cloudLight', 0.25) },
+    ];
+    for (const t of tiers) {
+      const off = cam * t.par;
+      ctx.beginPath();
+      ctx.moveTo(-W, -H);
+      const edge = [];
+      for (let sx = -W; sx <= W * 2; sx += 13) {
+        const y = t.y + raggedEdge(sx + off, t.seed, t.depth);
+        edge.push([sx, y]);
+        ctx.lineTo(sx, y);
+      }
+      ctx.lineTo(W * 2, -H);
+      ctx.closePath();
+      ctx.fillStyle = t.fill;
+      ctx.fill();
+      // Inner shadow just above the edge gives each tier a bevel.
+      ctx.strokeStyle = col('cloudShade', 0.5);
+      ctx.lineWidth = 6;
+      ctx.lineJoin = 'miter';
+      ctx.beginPath();
+      edge.forEach(([x, y], k) => (k ? ctx.lineTo(x, y - 6) : ctx.moveTo(x, y - 6)));
+      ctx.stroke();
+      // Thin rim of light along the bottom.
+      ctx.strokeStyle = t.rim;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      edge.forEach(([x, y], k) => (k ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      ctx.stroke();
+    }
+
+    // Lowered, stepped wall cloud above the tornado, with scud whipping round it.
     if (T && T.alpha > 0) {
-      const sx = T.x - cam;
+      const sx = T.x - cam + T.lean * 0.08;
       if (sx > -400 && sx < W + 400) {
+        const s = T.size, B = CLOUD_BASE;
+        ctx.save();
         ctx.globalAlpha = T.alpha;
-        const s = T.size;
-        const bumps = [[-120, -8, 34], [-62, 2, 40], [0, 8, 46], [62, 2, 40], [120, -8, 34]];
-        for (const [dx, dy, r] of bumps) {
-          puff(sx + dx * s + T.lean * 0.08, CLOUD_BASE + dy, r * s, col('cloudTop'), col('cloudBase'), col('cloudShade'));
+        const pts = [[-200, -24], [-150, 2], [-104, 8], [-84, 22]];
+        for (let k = 0; k <= 8; k++) {
+          const x = -70 + k * 17.5;
+          pts.push([x, 30 + hash(k * 5.7 + Math.floor(T.seed)) * 16 + (k % 2) * 6]);
         }
-        ctx.globalAlpha = 1;
+        pts.push([84, 20], [110, 6], [156, 0], [210, -24]);
+        ctx.beginPath();
+        pts.forEach(([x, y], k) => (k ? ctx.lineTo(sx + x * s, B + y * s) : ctx.moveTo(sx + x * s, B + y * s)));
+        ctx.closePath();
+        const wg = ctx.createLinearGradient(0, B - 24 * s, 0, B + 46 * s);
+        wg.addColorStop(0, col('cloudShade'));
+        wg.addColorStop(1, col('funnelShade'));
+        ctx.fillStyle = wg;
+        ctx.fill();
+        ctx.strokeStyle = col('sun', 0.3);
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        pts.slice(1, -1).forEach(([x, y], k) => (k ? ctx.lineTo(sx + x * s, B + y * s) : ctx.moveTo(sx + x * s, B + y * s)));
+        ctx.stroke();
+
+        // Ragged scud fragments circling the base
+        for (let k = 0; k < 6; k++) {
+          const a = game.t * (1.2 + T.ef * 0.15) + k * 1.047;
+          const fx = sx + Math.cos(a) * 110 * s;
+          const fy = B + 40 * s + Math.sin(a) * 8 * s;
+          const r = (9 + hash(k + 3) * 9) * s;
+          ctx.fillStyle = Math.sin(a) > 0 ? col('cloudShade', 0.95) : col('cloudBase', 0.8);
+          ctx.beginPath();
+          ctx.moveTo(fx - r, fy);
+          ctx.lineTo(fx - r * 0.2, fy - r * 0.6);
+          ctx.lineTo(fx + r, fy - r * 0.2);
+          ctx.lineTo(fx + r * 0.3, fy + r * 0.5);
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.restore();
       }
     }
   }
@@ -1529,57 +1599,6 @@
     text('Get out alive.', SW / 2, 112, { align: 'center' });
     if (Math.floor(performance.now() / 500) % 2) text('PRESS SPACE OR TAP', SW / 2, 140, { align: 'center', color: '#ffe680' });
     if (best > 0) text(`BEST ${best}`, SW / 2, 158, { align: 'center' });
-  }
-
-  // ---------------------------------------------------------------- contact sheet
-  const sheet = document.getElementById('sheet');
-  const sheetGrid = document.getElementById('sheet-grid');
-  const sheetSummary = document.getElementById('sheet-summary');
-  document.getElementById('again').addEventListener('click', () => {
-    initAudio();
-    startGame();
-    canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    canvas.focus();
-  });
-
-  function showContactSheet() {
-    const g = game;
-    sheetGrid.textContent = '';
-    const top = g.photos.reduce((m, p) => Math.max(m, p.points), 0);
-    if (!g.photos.length) {
-      const p = document.createElement('p');
-      p.style.color = '#ddd';
-      p.textContent = 'You didn\'t take a single frame.';
-      sheetGrid.appendChild(p);
-    }
-    for (const p of g.photos) {
-      const fig = document.createElement('figure');
-      if (top > 0 && p.points === top) fig.className = 'best';
-      if (p.src) {
-        const img = document.createElement('img');
-        img.src = p.src;
-        img.alt = `Frame ${p.frame}: ${p.label}`;
-        fig.appendChild(img);
-      }
-      const cap = document.createElement('figcaption');
-      const b = document.createElement('b');
-      b.textContent = `${String(p.frame).padStart(2, '0')}  ·  ${p.points} pts`;
-      cap.appendChild(b);
-      cap.appendChild(document.createElement('br'));
-      cap.appendChild(document.createTextNode(p.label));
-      if (p.quote) {
-        const q = document.createElement('span');
-        q.className = 'quote';
-        q.textContent = `\u201C${p.quote.text}\u201D \u2014 ${p.quote.who}, ${p.quote.src}`;
-        cap.appendChild(q);
-      }
-      fig.appendChild(cap);
-      sheetGrid.appendChild(fig);
-    }
-    const isBest = g.score > 0 && g.score >= best;
-    sheetSummary.textContent = `${g.endReason} ${g.photos.length} frames exposed. Score ${g.score}` +
-      (isBest ? '. A new personal best!' : `. Best ${best}.`);
-    sheet.style.display = 'block';
   }
 
   // ---------------------------------------------------------------- loop

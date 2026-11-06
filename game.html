@@ -35,21 +35,6 @@
   .controls button.shutter.active { background: red; color: white; }
   @media (pointer: coarse) { .controls { display: flex; } #game-wrap p.howto.keys { display: none; } }
 
-  #sheet { display: none; margin-top: 24px; }
-  #sheet h2 { margin-bottom: 8px; }
-  #sheet p { max-width: 100%; text-align: center; }
-  #sheet .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; background: #111; padding: 12px; }
-  #sheet figure { margin: 0; }
-  #sheet figure img { max-width: 100%; width: 100%; display: block; image-rendering: pixelated; }
-  #sheet figcaption .quote { display: block; margin-top: 4px; color: #a9a3c4; font-style: italic; }
-  #sheet figcaption { color: #ddd; font-size: 11px; font-weight: 300; margin-top: 4px; line-height: 1.35; }
-  #sheet figcaption b { color: white; font-weight: 600; }
-  #sheet figure.best figcaption b { color: #ff4a3d; }
-  #sheet .again {
-    display: block; margin: 16px auto 0; font-family: 'Manrope', sans-serif; font-size: 15px; font-weight: 600;
-    padding: 10px 28px; background: white; color: red; border: 1px solid red; cursor: pointer;
-  }
-  #sheet .again:hover { background: red; color: white; }
 </style>
 
 </head>
@@ -69,12 +54,6 @@
         <p class="howto keys">&larr; &rarr; / A D drive &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
         <p class="howto">Get close, or zoom in, for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase. Sound on.</p>
 
-        <section id="sheet" aria-live="polite">
-          <h2>Contact Sheet</h2>
-          <p id="sheet-summary"></p>
-          <div class="grid" id="sheet-grid"></div>
-          <button class="again" id="again">CHASE AGAIN</button>
-        </section>
       </div>
 
       <script src="game.js"></script>
