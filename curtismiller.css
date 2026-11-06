@@ -93,7 +93,7 @@ a{ text-decoration: none;
 }
 a:hover{color:red}
 
-.tornado-link{display: inline-block; padding: 8px; line-height: 0;}
+.tornado-link{display: block; width: fit-content; margin: 0 auto; padding: 8px; line-height: 0;}
 .tornado-link svg{display: block;}
 
 ul{list-style-position: outside;}
