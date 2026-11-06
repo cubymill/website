@@ -216,6 +216,17 @@
     open() { tone(midi(81), now(), { wave: 'triangle', decay: 0.1, gain: 0.1 }); tone(midi(88), now() + 0.07, { wave: 'triangle', decay: 0.2, gain: 0.1 }); },
     blip() { tone(midi(93), now(), { decay: 0.025, gain: 0.025 }); },
     close() { tone(midi(86), now(), { wave: 'triangle', decay: 0.08, gain: 0.08 }); tone(midi(79), now() + 0.06, { wave: 'triangle', decay: 0.12, gain: 0.08 }); },
+    sundown() { [62, 66, 69, 74, 78].forEach((n, i) => tone(midi(n), now() + i * 0.18, { wave: 'bell', decay: 2.2, gain: 0.08 })); },
+    cheers() {
+      tone(midi(96), now(), { wave: 'triangle', decay: 0.4, gain: 0.1 });
+      tone(midi(100), now() + 0.05, { wave: 'triangle', decay: 0.5, gain: 0.08 });
+      [62, 66, 69, 73, 76].forEach((n, i) => tone(midi(n), now() + 0.3 + i * 0.12, { wave: 'bell', decay: 2.5, gain: 0.09 }));
+    },
+    omen() {
+      noise(4, { freq: 70, q: 0.6, gain: 0.7, type: 'lowpass', decay: 4 });
+      tone(midi(38), now(), { wave: 'triangle', attack: 1, decay: 4, gain: 0.15 });
+    },
+    swept() { [0, 0.25, 0.5].forEach((d, i) => tone(180 + i * 60, now() + d, { decay: 0.6, gain: 0.07, glide: 4 })); },
     powerup() { [72, 76, 79, 84].forEach((n, i) => tone(midi(n), now() + i * 0.06, { decay: 0.1, gain: 0.07 })); },
     feral() {
       noise(0.6, { freq: 160, q: 1, gain: 0.4, type: 'lowpass', decay: 0.6 });
@@ -282,6 +293,7 @@
     else if (state === 'paused') togglePause();
     else if (state === 'dialog') advanceDialog();
     else if (state === 'over' && performance.now() - game.overAt > 1000) startGame();
+    else if (state === 'sunset' && game.st > 2 && game.swept < 0) endGame('Sunset. You called it a day.');
   }
 
   function togglePause() {
@@ -316,7 +328,7 @@
   }
 
   function endGame(reason) {
-    if (state !== 'play') return;
+    if (state !== 'play' && state !== 'sunset') return;
     game.endReason = reason;
     state = 'over';
     if (game.score > best) { best = game.score; saveBest(best); }
@@ -386,13 +398,17 @@
   function updateTornado(dt) {
     const T = game.tor;
     if (!T) {
+      if (state === 'sunset') return;
       game.nextTor -= dt;
       if (game.nextTor <= 0) spawnTornado(game.car.x);
       return;
     }
     T.pt += dt;
     T.retarget -= dt;
-    if (T.retarget <= 0) {
+    if (T.finale) {
+      T.retarget = 1;
+      T.tvx = Math.sign(game.px - T.x) * 85;
+    } else if (T.retarget <= 0) {
       T.retarget = rand(2, 5);
       T.tvx = rand(-1, 1) * (55 + T.ef * 14);
       // Sometimes the storm turns toward you.
@@ -406,14 +422,14 @@
       T.alpha = Math.min(1, T.pt / 3.5);
       if (T.pt >= 4) { T.phase = 'mature'; T.pt = 0; flashMsg(`Touchdown! Rated EF${T.ef}.`); sfx.touchdown(); }
     } else if (T.phase === 'mature') {
-      if (T.pt >= T.life) { T.phase = 'roping'; T.pt = 0; flashMsg('It\'s roping out. Last chance!'); }
+      if (T.pt >= T.life) { T.phase = 'roping'; T.pt = 0; if (state === 'play') flashMsg('It\'s roping out. Last chance!'); }
     } else if (T.phase === 'roping') {
       T.rope = Math.min(1, T.pt / 4);
       T.alpha = 1 - clamp((T.pt - 4) / 1.5, 0, 1);
       if (T.pt >= 5.5) {
         game.tor = null;
         game.nextTor = rand(2.5, 5);
-        flashMsg('Gone. Another storm is going up.');
+        if (state === 'play') flashMsg('Gone. Another storm is going up.');
       }
     }
   }
@@ -570,6 +586,256 @@
     sfx.close();
   }
 
+  // ---------------------------------------------------------------- sundown
+  // Survive to sunset and the chasers stop for a picnic. Linger too long
+  // and the sublime comes back for them.
+  const LINGER = 60;          // seconds after the toast before the last storm
+  const CHEERS_AT = 6.5;
+  const PS = 1.4;              // picnic and chasers are drawn a little larger
+
+  function startSunset() {
+    const g = game;
+    state = 'sunset';
+    Object.assign(g, {
+      st: 0, px: g.car.x + 140 * (g.car.dir || 1), cloudLift: 0, night: 0,
+      finale: false, swept: -1, cheered: false, dialogDelay: 0, pickup: null, msgT: 0,
+    });
+    keys.zoom = false;
+    if (g.tor && g.tor.phase !== 'roping') { g.tor.phase = 'roping'; g.tor.pt = 0; }
+    sfx.sundown();
+  }
+
+  function updateSunset(dt) {
+    const g = game;
+    g.st += dt;
+    if (!g.finale) {
+      g.cloudLift = Math.min(170, g.cloudLift + dt * 22);
+      g.night = Math.min(1, g.night + dt / 14);
+    } else {
+      g.cloudLift = Math.max(0, g.cloudLift - dt * 50);
+      g.night = Math.max(0.5, g.night - dt / 8);
+    }
+    if (!g.cheered && g.st > CHEERS_AT) {
+      g.cheered = true;
+      sfx.cheers();
+      flashMsg('Cheers to the day.', 5);
+    }
+    if (!g.finale && g.st > CHEERS_AT + LINGER) {
+      g.finale = true;
+      spawnTornado(g.px);
+      Object.assign(g.tor, { x: g.px + 760, ef: 4, size: 0.75 + 4 * 0.11, life: 1e9, finale: true, core: 1 });
+      sfx.omen();
+    }
+    const T = g.tor;
+    if (g.finale && T && g.swept < 0 && tornadoOnGround(T) && Math.abs(tornadoGroundX(T) - g.px) < 60) {
+      g.swept = 0;
+      sfx.swept();
+    }
+    if (g.swept >= 0) {
+      g.swept += dt;
+      g.shake = Math.max(g.shake, 4);
+      if (g.swept > 4.2) endGame('Swept up by the sublime.');
+    }
+  }
+
+  // Where each chaser is and what they are doing at this moment.
+  function chaserStates(g) {
+    const st = g.st, c = g.car, by = ROAD_Y - 16;
+    const seats = [g.px - 21, g.px + 21];
+    const starts = [c.x - 6, c.x + 10];
+    return [0, 1].map((i) => {
+      const walk = clamp((st - 1.6 - i * 0.3) / 2, 0, 1);
+      if (st < 1.6 + i * 0.3) return null; // still in the car
+      const x = lerp(starts[i], seats[i], walk);
+      const y = lerp(ROAD_Y, by, Math.min(1, walk * 1.6));
+      const face = i === 0 ? 1 : -1;
+      if (walk < 1) return { x, y, pose: 'walk', face: Math.sign(seats[i] - starts[i]) || 1, arm: 0 };
+      const toast = clamp((st - CHEERS_AT + 0.6) / 0.6, 0, 1) * (st < CHEERS_AT + 2.5 ? 1 : clamp(1 - (st - CHEERS_AT - 2.5) / 0.5, 0, 1));
+      const pose = st > 4.6 ? 'sit' : 'stand';
+      return { x, y, pose, face, arm: pose === 'sit' ? Math.max(toast, 0.35) : 0, glass: st > 5 };
+    });
+  }
+
+  const CHASERS = [
+    { coat: '#ffd23f', coatDark: '#c99a10', hair: '#4a2c1a' },
+    { coat: '#3fb5c4', coatDark: '#24808c', hair: '#2a1a12', cap: '#e8281f' },
+  ];
+
+  function drawChaser(x, y, o, look, t, spin) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (spin) ctx.rotate(spin);
+    ctx.scale(o.face * PS, PS);
+    ctx.lineCap = 'round';
+    const skin = '#f2c9a0', legs = '#3a3450';
+    let top;
+    if (o.pose === 'sit') {
+      ctx.strokeStyle = legs; ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(-2, -3); ctx.lineTo(8, -3); ctx.lineTo(11, 0); ctx.stroke();
+      top = -17;
+    } else {
+      const sw = o.pose === 'walk' ? Math.sin(t * 12) * 3.5 : 0;
+      ctx.strokeStyle = legs; ctx.lineWidth = 3.5;
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(sw, 0); ctx.moveTo(0, -10); ctx.lineTo(-sw, 0); ctx.stroke();
+      top = -23;
+    }
+    // Coat
+    const coat = ctx.createLinearGradient(-5, 0, 5, 0);
+    coat.addColorStop(0, look.coatDark); coat.addColorStop(1, look.coat);
+    ctx.fillStyle = coat;
+    pill(-5, top, 10, o.pose === 'sit' ? 15 : 14);
+    ctx.fill();
+    // Arm and glass
+    const sx = 2, sy = top + 4;
+    const hx = sx + 4 + o.arm * 2, hy = sy + 6 - o.arm * 13;
+    ctx.strokeStyle = look.coatDark; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(hx, hy); ctx.stroke();
+    if (o.glass) {
+      ctx.fillStyle = 'rgba(230,244,255,0.95)';
+      ctx.fillRect(hx - 1.5, hy - 6, 3.5, 5);
+      ctx.fillStyle = '#c0283a';
+      ctx.fillRect(hx - 1, hy - 3.5, 2.5, 2.5);
+      ctx.fillStyle = 'rgba(230,244,255,0.95)';
+      ctx.fillRect(hx - 0.2, hy - 1, 1, 3);
+    }
+    // Head, hair, cap
+    ctx.fillStyle = skin;
+    ctx.beginPath(); ctx.arc(0, top - 4, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = look.hair;
+    ctx.beginPath(); ctx.arc(-1, top - 6, 4.6, Math.PI * 0.9, Math.PI * 2.05); ctx.fill();
+    if (look.cap) {
+      ctx.fillStyle = look.cap;
+      ctx.beginPath(); ctx.arc(0, top - 6.5, 4.6, Math.PI, 0); ctx.fill();
+      ctx.fillRect(1, top - 7, 6, 1.8);
+    }
+    ctx.fillStyle = '#2a1a12';
+    ctx.fillRect(2, top - 5, 1.4, 1.4);
+    ctx.restore();
+  }
+
+  function drawBlanket(cx, by, w, spin) {
+    ctx.save();
+    ctx.translate(cx, by);
+    if (spin) ctx.rotate(spin);
+    ctx.scale(PS, PS);
+    const cols = 8, rows = 2, h = 9, cw = w / cols;
+    for (let r = 0; r < rows; r++) {
+      for (let k = 0; k < cols; k++) {
+        ctx.fillStyle = (r + k) % 2 ? '#fff4e0' : '#d8322b';
+        const skew = (rows - r) * 2;
+        ctx.fillRect(-w / 2 + k * cw - skew, -h + r * (h / rows), cw + 0.5, h / rows + 0.5);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawBasket(x, y, spin) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (spin) ctx.rotate(spin);
+    ctx.scale(PS, PS);
+    ctx.strokeStyle = '#6b4424'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(0, -7, 5, Math.PI, 0); ctx.stroke();
+    ctx.fillStyle = '#b07a44';
+    ctx.fillRect(-6, -7, 12, 7);
+    ctx.fillStyle = '#8a5a30';
+    ctx.fillRect(-6, -4, 12, 1.5);
+    ctx.fillStyle = '#245a34';
+    ctx.fillRect(8, -11, 3, 11);
+    ctx.fillRect(8.7, -14, 1.6, 3);
+    ctx.restore();
+  }
+
+  // The picnic, the chasers and the fireflies (world pass).
+  function drawPicnic(g, cam) {
+    const st = g.st, by = ROAD_Y - 14;
+    const px = g.px - cam;
+    const sw = g.swept;
+    const T = g.tor;
+    const gx = T ? tornadoGroundX(T) - cam : px;
+    // Something swept up spirals into the funnel and rises to the cloud.
+    const fly = (i, r0) => {
+      const k = Math.min(1, Math.pow(sw / 3.6, 1.4));
+      const a = sw * 6 + i * 2.1;
+      const r = r0 * (1 - k * 0.6);
+      return { x: gx + Math.cos(a) * r, y: lerp(by, CLOUD_BASE + 10, k) + Math.sin(a) * 4, spin: sw * (5 + i) };
+    };
+
+    const blanketW = clamp((st - 3.6) / 1, 0, 1) * 64;
+    if (blanketW > 0) {
+      if (sw >= 0) { const f = fly(2, 50); drawBlanket(f.x, f.y, blanketW, f.spin); }
+      else drawBlanket(px, by + 2, blanketW);
+    }
+    if (st > 4.4) {
+      if (sw >= 0) { const f = fly(3, 40); drawBasket(f.x, f.y, f.spin); }
+      else drawBasket(px, by - 1);
+    }
+    chaserStates(g).forEach((o, i) => {
+      if (!o) return;
+      if (sw >= 0) {
+        const f = fly(i, 30 + i * 12);
+        drawChaser(f.x, f.y, { ...o, pose: 'stand', arm: 1 }, CHASERS[i], g.t + sw, f.spin);
+      } else {
+        drawChaser(o.x - cam, o.y, o, CHASERS[i], st, 0);
+      }
+    });
+
+    // The clink
+    if (g.cheered && st < CHEERS_AT + 1) {
+      const a = 1 - (st - CHEERS_AT);
+      ctx.strokeStyle = `rgba(255,240,150,${a})`;
+      ctx.lineWidth = 2;
+      const cx = px, cy = by - 46;
+      ctx.beginPath();
+      for (let k = 0; k < 6; k++) {
+        const ang = k * Math.PI / 3;
+        ctx.moveTo(cx + Math.cos(ang) * 4, cy + Math.sin(ang) * 4);
+        ctx.lineTo(cx + Math.cos(ang) * (8 + (1 - a) * 8), cy + Math.sin(ang) * (8 + (1 - a) * 8));
+      }
+      ctx.stroke();
+    }
+
+    // Fireflies
+    if (st > 8 && sw < 0) {
+      for (let i = 0; i < 14; i++) {
+        const fx = px + Math.sin(st * 0.4 + i * 1.7) * (60 + hash(i) * 120);
+        const fy = by - 30 + Math.sin(st * 0.7 + i * 2.3) * 28;
+        const a = Math.max(0, Math.sin(st * 2 + i * 1.3)) * clamp((st - 8) / 3, 0, 1);
+        if (a <= 0.05) continue;
+        ctx.fillStyle = `rgba(220,255,120,${a * 0.35})`;
+        ctx.beginPath(); ctx.arc(fx, fy, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = `rgba(250,255,190,${a})`;
+        ctx.fillRect(fx - 1.2, fy - 1.2, 2.5, 2.5);
+      }
+    }
+  }
+
+  function drawStars(g) {
+    if (!g.night) return;
+    for (let i = 0; i < 70; i++) {
+      const x = hash(i + 300) * W;
+      const y = 6 + hash(i + 400) * (HORIZON - 70);
+      const a = g.night * (0.5 + 0.5 * Math.sin(g.st * 2 + i)) * 0.9;
+      ctx.fillStyle = `rgba(255,252,230,${a})`;
+      const s = hash(i + 500) > 0.85 ? 3.5 : 2.5;
+      ctx.fillRect(x, y, s, s);
+    }
+  }
+
+  // Screen-space text for the cutscene.
+  function drawSunsetOverlay(g) {
+    const st = g.st;
+    if (st > 0.3 && st < 3.6) {
+      const a = Math.min(1, (st - 0.3) * 2, (3.6 - st) * 2);
+      text('SUNDOWN', SW / 2, 54, { size: 16, align: 'center', color: '#ffb45a', outline: true, alpha: a });
+    }
+    if (st > 1) text(`SCORE ${g.score}   FRAMES ${g.frames}`, SW / 2, 8, { align: 'center', color: '#ffe680', alpha: Math.min(1, st - 1) });
+    if (g.msgT > 0) text(g.msg, SW / 2, 30, { align: 'center', alpha: Math.min(1, g.msgT * 2) });
+    if (st > CHEERS_AT + 2 && g.swept < 0 && Math.floor(performance.now() / 600) % 2) {
+      text('SPACE: CALL IT A DAY', SW / 2, SH - 14, { align: 'center', color: '#ffe680' });
+    }
+  }
+
   // ---------------------------------------------------------------- upgrades
   // Drive over a pickup to bolt it onto the car.
   const UPGRADES = {
@@ -686,13 +952,16 @@
       }
       const vmax = g.up.tires ? 410 : 340;
       c.vx = clamp(c.vx, -vmax, vmax);
+    } else if (state === 'sunset') {
+      c.vx -= Math.sign(c.vx) * Math.min(Math.abs(c.vx), 500 * dt);
+      updateSunset(dt);
     }
     c.x += c.vx * dt;
     c.wheel += c.vx * dt / 8;
     c.hurt = Math.max(0, c.hurt - dt);
 
     // Camera leads the car a little.
-    const target = c.x - W / 2 + c.vx * 0.45;
+    const target = state === 'sunset' ? (c.x + g.px) / 2 - W / 2 : c.x - W / 2 + c.vx * 0.45;
     g.camX += (target - g.camX) * Math.min(1, dt * 3.5);
 
     updateTornado(dt);
@@ -786,7 +1055,7 @@
 
     if (state === 'play') {
       if (c.hp <= 0) endGame('The storm took your car.');
-      else if (g.t >= DAY_LENGTH) endGame('Sunset. The chase is over.');
+      else if (g.t >= DAY_LENGTH) startSunset();
       else if (g.ending > 0) {
         g.ending -= dt;
         if (g.ending <= 0) endGame('Out of film.');
@@ -884,10 +1153,15 @@
     drawField(g, cam);
     if (T) drawRain(T, cam, g);
     if (T) drawTornado(T, cam);
+    if (state === 'sunset') drawStars(g);
+    ctx.save();
+    if (state === 'sunset') ctx.translate(0, -g.cloudLift);
     drawStormCloud(cam, T);
+    ctx.restore();
     drawLightning(g, cam);
     drawPoles(cam);
     drawRoad(cam);
+    if (state === 'sunset') drawPicnic(g, cam);
     drawPickup(g, cam);
     drawCar(g.car, cam);
     drawHail(g, cam);
@@ -900,6 +1174,10 @@
     }
     if (dusk > 0) {
       ctx.fillStyle = `rgba(70,40,110,${dusk * 0.22})`;
+      ctx.fillRect(-W, -H, W * 3, H * 3);
+    }
+    if (state === 'sunset' && g.night > 0) {
+      ctx.fillStyle = `rgba(16,12,48,${g.night * 0.3})`;
       ctx.fillRect(-W, -H, W * 3, H * 3);
     }
 
@@ -915,6 +1193,7 @@
     if (g.zoom > 1.02 && (state === 'play' || state === 'paused')) drawViewfinder(g);
     if (state === 'play' || state === 'paused' || state === 'dialog') drawHUD();
     if (state === 'dialog' && g.dialog) drawDialog(g.dialog);
+    if (state === 'sunset') drawSunsetOverlay(g);
     if (state === 'title') drawTitle();
     if (state === 'paused') drawCenter('PAUSED', 'Press P or tap to resume');
     if (state === 'over') {
