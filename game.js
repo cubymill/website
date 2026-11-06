@@ -892,6 +892,7 @@
     drawCar(g.car, cam);
     drawHail(g, cam);
     drawDebris(g, cam);
+    drawFence(cam);
 
     if (g.lightning > 0) {
       ctx.fillStyle = `rgba(255,250,224,${0.3 * (g.lightning / 0.3)})`;
@@ -1044,6 +1045,103 @@
         }
       }
       ctx.stroke();
+    }
+    drawCattle(g, cam);
+  }
+
+  // Small herds grazing in the wheat. Ones standing where the tornado is
+  // touching down are not drawn: they have been taken.
+  function drawCattle(g, cam) {
+    const T = g.tor;
+    const tx = T && tornadoOnGround(T) ? tornadoGroundX(T) - cam : null;
+    const bands = [{ k: 0.3, step: 300, seed: 1 }, { k: 0.7, step: 380, seed: 2 }];
+    for (const b of bands) {
+      const par = 0.32 + b.k * 0.6;
+      const scale = 0.75 + b.k * 0.75;
+      const y = HORIZON + 12 + Math.pow(b.k, 1.4) * (ROAD_Y - HORIZON - 34) + 4;
+      const off = cam * par;
+      const first = Math.floor((off - 200) / b.step);
+      for (let i = first; i < first + W / b.step + 3; i++) {
+        if (hash(i * 13.7 + b.seed) < 0.6) continue;
+        const n = 1 + Math.floor(hash(i * 5.1 + b.seed) * 3);
+        for (let j = 0; j < n; j++) {
+          const id = i * 7 + j + b.seed * 1000;
+          const x = i * b.step + j * 34 * scale + hash(id) * 20 - off;
+          if (x < -40 || x > W + 40) continue;
+          if (tx !== null && Math.abs(x - tx) < 120) continue;
+          drawGrazingCow(x, y + hash(id + 3) * 6, scale, hash(id + 5) > 0.5 ? 1 : -1, g.t + hash(id + 9) * 50);
+        }
+      }
+    }
+  }
+
+  function drawGrazingCow(x, y, s, face, t) {
+    const down = Math.sin(t * 0.5) > -0.4;   // mostly grazing, sometimes looking up
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(s * face, s);
+    // Shadow
+    ctx.fillStyle = 'rgba(80,60,40,0.25)';
+    ctx.beginPath(); ctx.ellipse(0, 0, 14, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+    // Legs
+    ctx.fillStyle = '#3a3440';
+    for (const lx of [-9, -5, 5, 9]) ctx.fillRect(lx - 1.2, -8, 2.6, 8);
+    // Tail
+    ctx.strokeStyle = '#3a3440';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(-12, -13); ctx.lineTo(-14 + Math.sin(t * 3) * 1.5, -6); ctx.stroke();
+    // Body
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#3a3440';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(0, -12, 13, 6.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#3a3440';
+    ctx.beginPath(); ctx.arc(-5, -13, 3.2, 0, Math.PI * 2); ctx.arc(4, -10, 2.4, 0, Math.PI * 2); ctx.fill();
+    // Head, down in the grass or up and looking around
+    const hx = 15, hy = down ? -4 + Math.sin(t * 6) * 0.6 : -17;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.ellipse(hx, hy, 4.5, 3.6, down ? 0.6 : 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffb3c1';
+    ctx.beginPath(); ctx.ellipse(hx + 3, hy + (down ? 2 : 1), 2, 1.6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3a3440';
+    ctx.fillRect(hx - 3, hy - 4.5, 2.2, 2.2);
+    ctx.restore();
+  }
+
+  // Barbed-wire fence along the near verge, slightly faster than the road.
+  function drawFence(cam) {
+    const par = 1.25, step = 150, top = ROAD_Y + 14;
+    const off = cam * par;
+    const first = Math.floor((off - 60) / step);
+    const posts = [];
+    for (let i = first; i < first + W / step + 3; i++) posts.push(i * step - off + hash(i + 77) * 10);
+    const strands = [top + 12, top + 34, top + 56];
+    ctx.strokeStyle = 'rgba(70,66,78,0.95)';
+    ctx.lineWidth = 2;
+    for (let i = 0; i < posts.length - 1; i++) {
+      const a = posts[i], b = posts[i + 1];
+      for (const sy of strands) {
+        ctx.beginPath();
+        ctx.moveTo(a, sy);
+        ctx.quadraticCurveTo((a + b) / 2, sy + 5, b, sy);
+        ctx.stroke();
+        // Barbs: little crosses along the strand
+        ctx.beginPath();
+        for (let k = 1; k < 7; k++) {
+          const f = k / 7, bx = lerp(a, b, f), by = sy + 5 * 4 * f * (1 - f) * 0.5;
+          ctx.moveTo(bx - 3, by - 3); ctx.lineTo(bx + 3, by + 3);
+          ctx.moveTo(bx - 3, by + 3); ctx.lineTo(bx + 3, by - 3);
+        }
+        ctx.stroke();
+      }
+    }
+    for (const x of posts) {
+      ctx.fillStyle = col('pole');
+      ctx.fillRect(x - 4, top, 8, H - top + 10);
+      ctx.fillStyle = col('poleLight');
+      ctx.fillRect(x + 1, top, 2, H - top + 10);
+      ctx.fillStyle = 'rgba(40,24,20,0.5)';
+      ctx.beginPath(); ctx.moveTo(x - 4, top); ctx.lineTo(x, top - 4); ctx.lineTo(x + 4, top); ctx.closePath(); ctx.fill();
     }
   }
 
