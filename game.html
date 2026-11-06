@@ -4,14 +4,14 @@
 <head>
   <meta charset="utf-8">
 
-  <title>Chase Day - Curtis Miller</title>
-  <meta name="description" content="Chase Day - a storm chasing game by Curtis Miller">
+  <title>A Dinner Date with the Sublime - Curtis Miller</title>
+  <meta name="description" content="A Dinner Date with the Sublime - a storm chasing game by Curtis Miller">
   <meta name="author" content="CURTIS BYRNSIDE MILLER">
 
   <link rel="stylesheet" href="curtismiller.css">
 
 <link rel="preconnect" href="https://fonts.gstatic.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
 <link rel="icon" type="image/png" href=""/>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,7 +19,8 @@
 <style>
   #game-wrap { max-width: 960px; margin: 0 auto; }
   #game {
-    display: block; width: 100%; aspect-ratio: 16 / 9; background: #6f7570;
+    display: block; width: 100%; aspect-ratio: 16 / 9; background: #76aad6;
+    image-rendering: pixelated; image-rendering: crisp-edges;
     touch-action: none; user-select: none; -webkit-user-select: none; outline: none;
   }
   #game-wrap p.howto { max-width: 100%; text-align: center; font-size: 12px; font-weight: 300; color: #555; }
@@ -39,7 +40,8 @@
   #sheet p { max-width: 100%; text-align: center; }
   #sheet .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; background: #111; padding: 12px; }
   #sheet figure { margin: 0; }
-  #sheet figure img { max-width: 100%; width: 100%; display: block; }
+  #sheet figure img { max-width: 100%; width: 100%; display: block; image-rendering: pixelated; }
+  #sheet figcaption .quote { display: block; margin-top: 4px; color: #a9a3c4; font-style: italic; }
   #sheet figcaption { color: #ddd; font-size: 11px; font-weight: 300; margin-top: 4px; line-height: 1.35; }
   #sheet figcaption b { color: white; font-weight: 600; }
   #sheet figure.best figcaption b { color: #ff4a3d; }
@@ -57,14 +59,15 @@
     <body>
       <br>
       <div id="game-wrap">
-        <canvas id="game" width="960" height="540" tabindex="0" aria-label="Chase Day, a storm chasing game"></canvas>
+        <canvas id="game" width="960" height="540" tabindex="0" aria-label="A Dinner Date with the Sublime, a storm chasing game"></canvas>
         <div class="controls" aria-hidden="true">
           <button data-key="left">&#9664;</button>
+          <button data-key="zoom">ZOOM</button>
           <button data-key="shutter" class="shutter">SHUTTER</button>
           <button data-key="right">&#9654;</button>
         </div>
-        <p class="howto keys">&larr; &rarr; / A D drive &nbsp;·&nbsp; SPACE take a photo &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
-        <p class="howto">Get close for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase.</p>
+        <p class="howto keys">&larr; &rarr; / A D drive &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
+        <p class="howto">Get close, or zoom in, for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase. Sound on.</p>
 
         <section id="sheet" aria-live="polite">
           <h2>Contact Sheet</h2>
