@@ -3,7 +3,11 @@
   'use strict';
 
   const canvas = document.getElementById('game');
-  const ctx = canvas.getContext('2d');
+  const mainCtx = canvas.getContext('2d');
+  // The scene is painted at logical resolution, then screened to halftone.
+  const scene = document.createElement('canvas');
+  const sceneCtx = scene.getContext('2d', { willReadFrequently: true });
+  let ctx = mainCtx; // whichever layer is currently being drawn
 
   // Logical resolution; the canvas is scaled to fit its container.
   const W = 960, H = 540;
@@ -24,7 +28,51 @@
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     canvas.width = W * dpr;
     canvas.height = H * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    mainCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  scene.width = W; scene.height = H;
+
+  // ---------------------------------------------------------------- halftone
+  // 45-degree round-dot screen: a tile of thresholds, one per pixel.
+  const PAPER = [244, 241, 234], INK = [20, 20, 20];
+  const PAPER_CSS = '#f4f1ea', INK_CSS = '#141414';
+  const TILE = 12;
+  const threshold = new Float32Array(TILE * TILE);
+  {
+    const cell = TILE / Math.SQRT2;
+    for (let y = 0; y < TILE; y++) {
+      for (let x = 0; x < TILE; x++) {
+        const u = (x + 0.5 + y + 0.5) / Math.SQRT2 / cell;
+        const v = (x + 0.5 - y - 0.5) / Math.SQRT2 / cell;
+        const fu = u - Math.floor(u) - 0.5, fv = v - Math.floor(v) - 0.5;
+        threshold[y * TILE + x] = fu * fu + fv * fv;
+      }
+    }
+    // Replace distances with their rank so ink coverage tracks tone exactly.
+    const order = [...threshold.keys()].sort((i, j) => threshold[i] - threshold[j]);
+    order.forEach((idx, rank) => { threshold[idx] = (rank + 0.5) / threshold.length; });
+  }
+  // Tone curve: darkness (0..1, as 0..765 summed rgb) -> ink coverage.
+  const tone = new Float32Array(766);
+  for (let i = 0; i < 766; i++) {
+    const d = 1 - i / 765;
+    tone[i] = clamp((d - 0.06) / 0.88, 0, 1);
+  }
+  function halftone() {
+    const img = sceneCtx.getImageData(0, 0, W, H);
+    const px = img.data;
+    for (let y = 0, i = 0; y < H; y++) {
+      const row = (y % TILE) * TILE;
+      for (let x = 0; x < W; x++, i += 4) {
+        const ink = tone[px[i] + px[i + 1] + px[i + 2]] > threshold[row + (x % TILE)];
+        const c = ink ? INK : PAPER;
+        px[i] = c[0]; px[i + 1] = c[1]; px[i + 2] = c[2];
+      }
+    }
+    sceneCtx.putImageData(img, 0, 0);
+    mainCtx.imageSmoothingEnabled = false;
+    mainCtx.drawImage(scene, 0, 0, W, H);
+    mainCtx.imageSmoothingEnabled = true;
   }
   resize();
   window.addEventListener('resize', resize);
@@ -437,10 +485,10 @@
 
   // ---------------------------------------------------------------- drawing
   function skyColors(dusk) {
-    // Afternoon storm light to a dark orange dusk.
-    const top = mix([70, 78, 76], [34, 30, 40], dusk);
-    const mid = mix([128, 140, 130], [120, 74, 56], dusk);
-    const low = mix([196, 200, 182], [214, 120, 64], dusk);
+    // Pale afternoon light to a dim dusk (values only; this is printed in halftone).
+    const top = mix([150, 150, 150], [70, 70, 70], dusk);
+    const mid = mix([208, 208, 208], [120, 120, 120], dusk);
+    const low = mix([238, 238, 238], [165, 165, 165], dusk);
     return { top, mid, low };
   }
   function mix(a, b, t) { return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]; }
@@ -451,8 +499,11 @@
     const dusk = clamp((g.t - DAY_LENGTH * 0.55) / (DAY_LENGTH * 0.45), 0, 1);
     const cam = g.camX;
 
+    const shakeX = g.shake > 0 ? rand(-g.shake, g.shake) : 0;
+    const shakeY = g.shake > 0 ? rand(-g.shake, g.shake) : 0;
+    ctx = sceneCtx;
     ctx.save();
-    if (g.shake > 0) ctx.translate(rand(-g.shake, g.shake), rand(-g.shake, g.shake));
+    ctx.translate(shakeX, shakeY);
 
     // Sky
     const sky = skyColors(dusk);
@@ -464,7 +515,7 @@
     ctx.fillRect(-20, -20, W + 40, HORIZON + 20);
 
     // Storm cloud base with a lumpy underside
-    ctx.fillStyle = rgb(mix([52, 58, 58], [28, 24, 32], dusk));
+    ctx.fillStyle = rgb(mix([62, 62, 62], [38, 38, 38], dusk));
     ctx.beginPath();
     ctx.moveTo(-20, -20);
     for (let sx = -20; sx <= W + 20; sx += 12) {
@@ -486,7 +537,7 @@
     }
 
     // Distant hills
-    ctx.fillStyle = rgb(mix([96, 104, 92], [60, 44, 44], dusk));
+    ctx.fillStyle = rgb(mix([150, 150, 150], [100, 100, 100], dusk));
     ctx.beginPath();
     ctx.moveTo(-20, HORIZON + 2);
     for (let sx = -20; sx <= W + 20; sx += 16) {
@@ -499,11 +550,11 @@
 
     // Field
     const fg = ctx.createLinearGradient(0, HORIZON, 0, ROAD_Y);
-    fg.addColorStop(0, rgb(mix([150, 140, 96], [110, 70, 50], dusk)));
-    fg.addColorStop(1, rgb(mix([186, 164, 104], [150, 92, 58], dusk)));
+    fg.addColorStop(0, rgb(mix([196, 196, 196], [130, 130, 130], dusk)));
+    fg.addColorStop(1, rgb(mix([222, 222, 222], [150, 150, 150], dusk)));
     ctx.fillStyle = fg;
     ctx.fillRect(-20, HORIZON, W + 40, ROAD_Y - HORIZON);
-    ctx.strokeStyle = rgb(mix([120, 110, 70], [90, 56, 40], dusk), 0.5);
+    ctx.strokeStyle = rgb(mix([120, 120, 120], [80, 80, 80], dusk), 0.7);
     ctx.lineWidth = 1;
     for (let i = 0; i < 9; i++) {
       const y = HORIZON + 6 + Math.pow(i / 8, 1.6) * (ROAD_Y - HORIZON - 20);
@@ -517,8 +568,8 @@
       const [a, b] = coreRange(T);
       const x0 = a - cam, x1 = b - cam;
       const rg = ctx.createLinearGradient(x0, 0, x1, 0);
-      const ca = rgb(mix([70, 78, 80], [40, 34, 40], dusk), 0);
-      const cb = rgb(mix([70, 78, 80], [40, 34, 40], dusk), 0.6 * T.alpha);
+      const ca = rgb(mix([105, 105, 105], [70, 70, 70], dusk), 0);
+      const cb = rgb(mix([105, 105, 105], [70, 70, 70], dusk), 0.65 * T.alpha);
       if (T.core > 0) { rg.addColorStop(0, ca); rg.addColorStop(0.35, cb); rg.addColorStop(1, cb); }
       else { rg.addColorStop(0, cb); rg.addColorStop(0.65, cb); rg.addColorStop(1, ca); }
       ctx.fillStyle = rg;
@@ -536,10 +587,57 @@
     // Tornado
     if (T) drawTornado(T, cam, dusk);
 
+    // Road
+    ctx.fillStyle = rgb(mix([50, 50, 50], [36, 36, 36], dusk));
+    ctx.fillRect(-20, ROAD_Y - 8, W + 40, 40);
+    ctx.fillStyle = rgb(mix([240, 240, 240], [200, 200, 200], dusk));
+    const dash = 60;
+    const dashOff = -(((cam % (dash * 2)) + dash * 2) % (dash * 2));
+    for (let x = dashOff - 20; x < W + 20; x += dash * 2) ctx.fillRect(x, ROAD_Y + 11, dash, 3);
+    ctx.fillStyle = rgb(mix([140, 140, 140], [95, 95, 95], dusk));
+    ctx.fillRect(-20, ROAD_Y + 32, W + 40, H - ROAD_Y);
+
+    // Lightning illumination and darkening at dusk
+    if (g.lightning > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${0.35 * (g.lightning / 0.3)})`;
+      ctx.fillRect(-20, -20, W + 40, H + 40);
+    }
+    if (dusk > 0) {
+      ctx.fillStyle = `rgba(0,0,0,${dusk * 0.3})`;
+      ctx.fillRect(-20, -20, W + 40, H + 40);
+    }
+
+    ctx.restore();
+    ctx = mainCtx;
+    halftone();
+
+    // Line work and the car sit on top of the screen.
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    drawForeground(g, cam);
+    drawCar(g.car, cam);
+    ctx.restore();
+
+    // The photo is captured before the HUD and flash are drawn.
+    if (g.pendingShot) captureShot();
+
+    if (g.flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${g.flash * 0.85})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    if (state === 'play' || state === 'paused') drawHUD();
+    if (state === 'title') drawTitle();
+    if (state === 'paused') drawCenter('PAUSED', 'Press P or tap to resume');
+    if (state === 'over') drawCenter(g.endReason, `Score ${g.score}. Your contact sheet is below.`);
+  }
+
+  // Solid ink line work drawn over the halftone.
+  function drawForeground(g, cam) {
     // Telephone poles and wires
     const poleSpacing = 260;
     const firstPole = Math.floor((cam - 40) / poleSpacing) * poleSpacing;
-    ctx.strokeStyle = 'rgba(25,22,22,0.85)';
+    ctx.strokeStyle = INK_CSS;
     ctx.lineWidth = 3;
     const poleTops = [];
     for (let wx = firstPole; wx < cam + W + 300; wx += poleSpacing) {
@@ -559,29 +657,18 @@
       }
     }
 
-    // Road
-    ctx.fillStyle = rgb(mix([62, 62, 60], [40, 34, 36], dusk));
-    ctx.fillRect(-20, ROAD_Y - 8, W + 40, 40);
-    ctx.fillStyle = rgb(mix([210, 190, 120], [180, 120, 70], dusk));
-    const dash = 60;
-    const dashOff = -(((cam % (dash * 2)) + dash * 2) % (dash * 2));
-    for (let x = dashOff - 20; x < W + 20; x += dash * 2) ctx.fillRect(x, ROAD_Y + 11, dash, 3);
-    ctx.fillStyle = rgb(mix([96, 110, 70], [64, 52, 40], dusk));
-    ctx.fillRect(-20, ROAD_Y + 32, W + 40, H - ROAD_Y);
-
-    // Car
-    drawCar(g.car, cam);
-
     // Hail
-    ctx.fillStyle = 'rgba(240,244,246,0.9)';
+    ctx.fillStyle = PAPER_CSS;
+    ctx.strokeStyle = INK_CSS;
+    ctx.lineWidth = 1;
     for (const h of g.hail) {
       const sx = h.x - cam;
       if (sx < -10 || sx > W + 10) continue;
-      ctx.beginPath(); ctx.arc(sx, h.y, 2.2, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(sx, h.y, 2.4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     }
 
     // Debris
-    ctx.fillStyle = 'rgba(40,30,24,0.95)';
+    ctx.fillStyle = INK_CSS;
     for (const p of g.debris) {
       const sx = p.x - cam;
       if (sx < -20 || sx > W + 20) continue;
@@ -590,30 +677,6 @@
       ctx.restore();
     }
 
-    // Lightning illumination and darkening at dusk
-    if (g.lightning > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${0.35 * (g.lightning / 0.3)})`;
-      ctx.fillRect(-20, -20, W + 40, H + 40);
-    }
-    if (dusk > 0) {
-      ctx.fillStyle = `rgba(10,6,20,${dusk * 0.35})`;
-      ctx.fillRect(-20, -20, W + 40, H + 40);
-    }
-
-    ctx.restore();
-
-    // The photo is captured before the HUD and flash are drawn.
-    if (g.pendingShot) captureShot();
-
-    if (g.flash > 0) {
-      ctx.fillStyle = `rgba(255,255,255,${g.flash * 0.85})`;
-      ctx.fillRect(0, 0, W, H);
-    }
-
-    if (state === 'play' || state === 'paused') drawHUD();
-    if (state === 'title') drawTitle();
-    if (state === 'paused') drawCenter('PAUSED', 'Press P or tap to resume');
-    if (state === 'over') drawCenter(g.endReason, `Score ${g.score}. Your contact sheet is below.`);
   }
 
   function drawTornado(T, cam, dusk) {
@@ -631,14 +694,14 @@
     if (sx < -700 || sx > W + 700) return;
 
     // Wall cloud
-    ctx.fillStyle = rgb(mix([46, 50, 52], [24, 20, 28], dusk), T.alpha * 0.95);
+    ctx.fillStyle = rgb(mix([48, 48, 48], [30, 30, 30], dusk), T.alpha * 0.95);
     ctx.beginPath();
     ctx.ellipse(sx + T.lean * 0.1, CLOUD_BASE + 2, 190 * T.size, 26, 0, 0, Math.PI * 2);
     ctx.fill();
 
     // Funnel
-    const col = mix([62, 62, 60], [34, 28, 32], dusk);
-    ctx.fillStyle = rgb(col, 0.88 * T.alpha);
+    const col = mix([28, 28, 28], [18, 18, 18], dusk);
+    ctx.fillStyle = rgb(col, 0.92 * T.alpha);
     ctx.beginPath();
     ctx.moveTo(left[0][0], left[0][1] - 6);
     for (const [x, y] of left) ctx.lineTo(x, y);
@@ -648,7 +711,7 @@
     ctx.fill();
 
     // Rotation streaks
-    ctx.strokeStyle = `rgba(150,150,145,${0.14 * T.alpha})`;
+    ctx.strokeStyle = `rgba(140,140,140,${0.3 * T.alpha})`;
     ctx.lineWidth = 1;
     for (let k = 0; k < 4; k++) {
       ctx.beginPath();
@@ -667,7 +730,7 @@
       for (const p of game.dust) {
         const px = p.x - cam + Math.cos(p.a) * p.r;
         const a = clamp(p.life / p.max, 0, 1) * 0.55 * T.alpha;
-        ctx.fillStyle = `rgba(92,74,58,${a})`;
+        ctx.fillStyle = `rgba(60,60,60,${a})`;
         ctx.beginPath(); ctx.arc(px, p.y, 6 + p.r * 0.25, 0, Math.PI * 2); ctx.fill();
       }
     }
@@ -681,7 +744,7 @@
     ctx.scale(c.dir, 1);
     // Body: early-2000s Pontiac Vibe silhouette (front faces +x).
     const hurtFlash = c.hurt > 0 && Math.floor(c.hurt * 30) % 2;
-    ctx.fillStyle = hurtFlash ? '#ffffff' : '#c8161d';
+    ctx.fillStyle = hurtFlash ? '#f4f1ea' : '#e0201a';
     ctx.beginPath();
     ctx.moveTo(-34, -9);
     ctx.lineTo(-34, -22);   // upright rear hatch
@@ -695,7 +758,7 @@
     ctx.closePath();
     ctx.fill();
     // Rear spoiler lip
-    ctx.fillStyle = hurtFlash ? '#ffffff' : '#a80f15';
+    ctx.fillStyle = hurtFlash ? '#f4f1ea' : '#e0201a';
     ctx.beginPath();
     ctx.moveTo(-28, -37); ctx.lineTo(-36, -38); ctx.lineTo(-35, -35); ctx.lineTo(-29, -35);
     ctx.closePath(); ctx.fill();
@@ -703,7 +766,7 @@
     ctx.fillStyle = '#1b1b1d';
     ctx.fillRect(-34, -13, 69, 5);
     // Windows: rear quarter, rear door, front door
-    ctx.fillStyle = 'rgba(28,34,40,0.92)';
+    ctx.fillStyle = '#141414';
     ctx.beginPath();
     ctx.moveTo(-31, -24); ctx.lineTo(-29.5, -33); ctx.lineTo(-23, -33); ctx.lineTo(-23, -24); ctx.closePath(); ctx.fill();
     ctx.fillRect(-21, -33, 12, 9);
@@ -726,9 +789,9 @@
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(-18, -37); ctx.lineTo(-24, -54); ctx.stroke();
     // Lights: tall rear lamp, swept headlight, split grille
-    ctx.fillStyle = '#ff6b5e';
+    ctx.fillStyle = '#141414';
     ctx.fillRect(-34, -30, 2.5, 9);
-    ctx.fillStyle = '#ffe9a8';
+    ctx.fillStyle = '#f4f1ea';
     ctx.beginPath(); ctx.moveTo(27, -20); ctx.lineTo(34, -18); ctx.lineTo(34, -15); ctx.lineTo(28, -16.5); ctx.closePath(); ctx.fill();
     ctx.fillStyle = '#1b1b1d';
     ctx.fillRect(32, -14, 3, 2);
@@ -747,12 +810,16 @@
     ctx.restore();
   }
 
-  function text(str, x, y, { size = 14, weight = 600, align = 'left', color = '#fff', alpha = 1 } = {}) {
+  function text(str, x, y, { size = 14, weight = 600, align = 'left', color = '#f4f1ea', alpha = 1 } = {}) {
     ctx.font = `${weight} ${size}px Manrope, sans-serif`;
     ctx.textAlign = align;
     ctx.textBaseline = 'middle';
     ctx.fillStyle = color;
     ctx.globalAlpha = alpha;
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#141414';
+    ctx.strokeText(str, x, y);
     ctx.fillText(str, x, y);
     ctx.globalAlpha = 1;
   }
@@ -769,7 +836,7 @@
     text('CAR', 18, H - 22, { size: 12 });
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(52, H - 28, 140, 12);
-    ctx.fillStyle = g.car.hp > 30 ? '#fff' : '#ff3b2f';
+    ctx.fillStyle = g.car.hp > 30 ? '#fff' : '#e0201a';
     ctx.fillRect(52, H - 28, 140 * (g.car.hp / 100), 12);
 
     // Range to tornado
@@ -782,7 +849,7 @@
       if (sx < 0 || sx > W) {
         const left = sx < 0;
         const ax = left ? 22 : W - 22, ay = 250;
-        ctx.fillStyle = '#ff3b2f';
+        ctx.fillStyle = '#e0201a';
         ctx.beginPath();
         ctx.moveTo(ax + (left ? -10 : 10), ay);
         ctx.lineTo(ax + (left ? 8 : -8), ay - 12);
@@ -808,11 +875,9 @@
   }
 
   function drawTitle() {
-    ctx.fillStyle = 'rgba(0,0,0,0.35)';
-    ctx.fillRect(0, 0, W, H);
-    text('CHASE DAY', W / 2, 200, { size: 54, weight: 700, align: 'center', color: '#ff3b2f' });
+    text('CHASE DAY', W / 2, 200, { size: 54, weight: 700, align: 'center', color: '#e0201a' });
     text('Drive close. Take the picture. Get out alive.', W / 2, 250, { size: 17, weight: 300, align: 'center' });
-    text('Press SPACE or tap to start', W / 2, 300, { size: 15, align: 'center', alpha: 0.6 + 0.4 * Math.sin(performance.now() / 300) });
+    text('Press SPACE or tap to start', W / 2, 300, { size: 15, align: 'center', alpha: 0.8 + 0.2 * Math.sin(performance.now() / 300) });
     if (best > 0) text(`Best: ${best}`, W / 2, 334, { size: 13, weight: 300, align: 'center' });
   }
 
