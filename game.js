@@ -40,7 +40,8 @@
   // A tiny 16-bit-console-style synth: soft voices through a filtered echo,
   // the way the old sound chips did it. The music is generative: looping
   // notes of different lengths drift in and out of phase, so it never repeats.
-  let audio = null, master = null, musicBus = null, sfxBus = null, echoIn = null, bellWave = null;
+  let audio = null, master = null, musicBus = null, metalBus = null, sfxBus = null, echoIn = null, echoDelay = null;
+  let waves = {}, noiseBuf = null, guitarIn = null;
   let muted = false, musicTimer = null;
 
   function initAudio() {
@@ -57,7 +58,8 @@
     echoIn = audio.createGain();
     echoIn.gain.value = 0.55;
     const delay = audio.createDelay(1);
-    delay.delayTime.value = 0.36;
+    delay.delayTime.value = SONGS[songIndex].echo;
+    echoDelay = delay;
     const feedback = audio.createGain();
     feedback.gain.value = 0.5;
     const damp = audio.createBiquadFilter();
@@ -79,7 +81,36 @@
     sfxEcho.gain.value = 0.3;
     sfxBus.connect(sfxEcho).connect(echoIn);
 
-    bellWave = audio.createPeriodicWave(new Float32Array(6), new Float32Array([0, 1, 0.45, 0.2, 0.1, 0.05]));
+    const wave = (h) => audio.createPeriodicWave(new Float32Array(h.length), new Float32Array(h));
+    waves = {
+      bell: wave([0, 1, 0.45, 0.2, 0.1, 0.05]),
+      glass: wave([0, 1, 0, 0.32, 0, 0.14, 0, 0.06]),
+      soft: wave([0, 1, 0.12, 0.04]),
+    };
+
+    // A shared block of stepped noise, like a console noise channel.
+    noiseBuf = audio.createBuffer(1, audio.sampleRate * 2, audio.sampleRate);
+    const nd = noiseBuf.getChannelData(0);
+    let v = 0;
+    for (let i = 0; i < nd.length; i++) { if (i % 3 === 0) v = Math.random() * 2 - 1; nd[i] = v; }
+
+    // Metal: its own bus, with a distortion stage for the guitar.
+    metalBus = audio.createGain();
+    metalBus.gain.value = 0;
+    metalBus.connect(master);
+    const metalEcho = audio.createGain();
+    metalEcho.gain.value = 0.15;
+    metalBus.connect(metalEcho).connect(echoIn);
+    guitarIn = audio.createGain();
+    const drive = audio.createWaveShaper();
+    const curve = new Float32Array(1024);
+    for (let i = 0; i < curve.length; i++) { const x = i / 511.5 - 1; curve[i] = Math.tanh(x * 8); }
+    drive.curve = curve;
+    const cab = audio.createBiquadFilter();
+    cab.type = 'lowpass';
+    cab.frequency.value = 2600;
+    guitarIn.connect(drive).connect(cab).connect(metalBus);
+
     startMusic();
   }
 
@@ -93,7 +124,7 @@
   function tone(freq, t, { wave = 'square', attack = 0.004, decay = 0.2, gain = 0.1, glide = 0, bus = sfxBus } = {}) {
     if (!audio) return;
     const o = audio.createOscillator();
-    if (wave === 'bell') o.setPeriodicWave(bellWave); else o.type = wave;
+    if (waves[wave]) o.setPeriodicWave(waves[wave]); else o.type = wave;
     o.frequency.setValueAtTime(freq, t);
     if (glide) o.frequency.exponentialRampToValueAtTime(freq * glide, t + Math.min(decay, 0.12));
     const g = audio.createGain();
@@ -105,24 +136,18 @@
     o.stop(t + attack + decay + 0.05);
   }
 
-  function noise(duration, { freq = 1000, q = 1, gain = 0.3, type = 'bandpass', decay = duration } = {}) {
+  function noise(duration, { freq = 1000, q = 1, gain = 0.3, type = 'bandpass', decay = duration, at = 0, bus = sfxBus } = {}) {
     if (!audio) return;
-    const len = Math.floor(audio.sampleRate * duration);
-    const buf = audio.createBuffer(1, len, audio.sampleRate);
-    const data = buf.getChannelData(0);
-    // Stepped noise, like a console noise channel.
-    let v = 0;
-    for (let i = 0; i < len; i++) { if (i % 3 === 0) v = Math.random() * 2 - 1; data[i] = v; }
+    const t = at || audio.currentTime;
     const src = audio.createBufferSource();
-    src.buffer = buf;
+    src.buffer = noiseBuf;
     const filter = audio.createBiquadFilter();
     filter.type = type; filter.frequency.value = freq; filter.Q.value = q;
     const g = audio.createGain();
-    const now = audio.currentTime;
-    g.gain.setValueAtTime(gain, now);
-    g.gain.exponentialRampToValueAtTime(0.001, now + decay);
-    src.connect(filter).connect(g).connect(sfxBus);
-    src.start(now);
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + decay);
+    src.connect(filter).connect(g).connect(bus);
+    src.start(t, Math.random() * (2 - Math.min(1.9, duration)), duration);
   }
 
   function pad(freq, t, len) {
@@ -146,26 +171,62 @@
     f.connect(g).connect(musicBus);
   }
 
-  // Each loop repeats one note on its own period (in seconds).
-  const LOOPS = [
-    { n: 66, period: 7.1, at: 0.4 },
-    { n: 69, period: 8.9, at: 2.3 },
-    { n: 74, period: 11.3, at: 4.1 },
-    { n: 71, period: 13.7, at: 6.0 },
-    { n: 76, period: 17.9, at: 9.2 },
-    { n: 62, period: 19.3, at: 1.7 },
-    { n: 81, period: 23.3, at: 12.5 },
+  // Three ambient pieces, one per round. Each loop repeats one note on its
+  // own period (seconds), so the voices drift in and out of phase.
+  const SONGS = [
+    { // Bright pentatonic bells over D
+      wave: 'bell', echo: 0.36, gap: [0.3, 1.5],
+      loops: [[66, 7.1, 0.4], [69, 8.9, 2.3], [74, 11.3, 4.1], [71, 13.7, 6.0], [76, 17.9, 9.2], [62, 19.3, 1.7], [81, 23.3, 12.5]],
+      bubbles: [74, 76, 78, 81, 83, 86, 88, 90],
+      pads: [[50, 57, 64, 66], [47, 54, 62, 66], [43, 50, 57, 62], [45, 52, 59, 64]],
+    },
+    { // Low fields: slow, dorian, soft voices
+      wave: 'soft', echo: 0.52, gap: [0.9, 2.8],
+      loops: [[57, 9.7, 0.8], [60, 12.1, 3.5], [64, 14.9, 6.2], [66, 17.3, 1.9], [69, 21.1, 9.8], [71, 25.7, 4.4], [74, 29.3, 13.1]],
+      bubbles: [69, 72, 74, 76, 79, 81],
+      pads: [[45, 52, 59, 60], [41, 48, 55, 57], [43, 50, 57, 62], [38, 45, 52, 57]],
+    },
+    { // Glass weather: quick, lydian, glassy
+      wave: 'glass', echo: 0.27, gap: [0.2, 1.0],
+      loops: [[65, 5.3, 0.3], [69, 6.7, 1.6], [71, 8.3, 2.9], [72, 9.9, 0.9], [76, 12.7, 4.2], [77, 15.1, 6.8], [84, 18.7, 9.5]],
+      bubbles: [84, 86, 88, 91, 93, 96],
+      pads: [[53, 60, 64, 69], [50, 57, 64, 67], [48, 55, 64, 67], [45, 52, 60, 64]],
+    },
   ];
-  const BUBBLES = [74, 76, 78, 81, 83, 86, 88, 90];
-  const PADS = [[50, 57, 64, 66], [47, 54, 62, 66], [43, 50, 57, 62], [45, 52, 59, 64]];
+  let songIndex = 0, musicMode = 'ambient';
   let loopNext = [], padNext = 0, padIndex = 0, bubbleNext = 0;
+  let metalNext = 0, metalStep = 0;
 
   function startMusic() {
+    resetAmbient();
+    musicTimer = setInterval(scheduleMusic, 100);
+  }
+
+  function resetAmbient() {
+    if (!audio) return;
     const now = audio.currentTime + 0.1;
-    loopNext = LOOPS.map((l) => now + l.at);
+    const song = SONGS[songIndex];
+    loopNext = song.loops.map((l) => now + l[2]);
     padNext = now;
     bubbleNext = now + 1.5;
-    musicTimer = setInterval(scheduleMusic, 120);
+  }
+
+  function setSong(i) {
+    songIndex = i % SONGS.length;
+    if (!audio) return;
+    echoDelay.delayTime.setTargetAtTime(SONGS[songIndex].echo, audio.currentTime, 0.5);
+    resetAmbient();
+  }
+
+  function setMusicMode(mode) {
+    if (mode === musicMode) return;
+    musicMode = mode;
+    if (!audio) return;
+    const t = audio.currentTime;
+    musicBus.gain.setTargetAtTime(mode === 'ambient' ? 0.6 : 0, t, mode === 'ambient' ? 1 : 0.3);
+    metalBus.gain.setTargetAtTime(mode === 'metal' ? 0.55 : 0, t, mode === 'metal' ? 0.05 : 0.4);
+    if (mode === 'metal') { metalNext = t + 0.15; metalStep = 0; }
+    else resetAmbient();
   }
 
   function stormCloseness() {
@@ -177,23 +238,111 @@
   function scheduleMusic() {
     if (!audio || audio.state !== 'running') return;
     const horizon = audio.currentTime + 0.4;
-    LOOPS.forEach((l, i) => {
+    if (musicMode === 'metal') { scheduleMetal(horizon); return; }
+    const song = SONGS[songIndex];
+    song.loops.forEach(([n, period], i) => {
+      while (loopNext[i] < audio.currentTime) loopNext[i] += period;
       while (loopNext[i] < horizon) {
-        tone(midi(l.n), loopNext[i], { wave: 'bell', attack: 0.01, decay: 2.8, gain: 0.08, bus: musicBus });
-        loopNext[i] += l.period;
+        tone(midi(n), loopNext[i], { wave: song.wave, attack: 0.01, decay: 2.8, gain: 0.08, bus: musicBus });
+        loopNext[i] += period;
       }
     });
+    if (padNext < audio.currentTime - 1) padNext = audio.currentTime;
     while (padNext < horizon) {
-      for (const n of PADS[padIndex % PADS.length]) pad(midi(n), padNext, 17);
+      for (const n of song.pads[padIndex % song.pads.length]) pad(midi(n), padNext, 17);
       padIndex++;
       padNext += 16;
     }
+    if (bubbleNext < audio.currentTime) bubbleNext = audio.currentTime + 0.1;
     while (bubbleNext < horizon) {
       const near = stormCloseness();
-      const n = BUBBLES[(Math.random() * BUBBLES.length) | 0];
+      const n = song.bubbles[(Math.random() * song.bubbles.length) | 0];
       tone(midi(n), bubbleNext, { wave: 'sine', decay: 0.16, gain: 0.05 + near * 0.04, glide: 1.5, bus: musicBus });
       if (Math.random() < 0.3) tone(midi(n + 5), bubbleNext + 0.09, { wave: 'sine', decay: 0.12, gain: 0.04, glide: 1.5, bus: musicBus });
-      bubbleNext += rand(0.3, 1.5) * (1 - near * 0.6);
+      bubbleNext += rand(song.gap[0], song.gap[1]) * (1 - near * 0.6);
+    }
+  }
+
+  // ---- Triumphant chiptune metal for the fully kitted car.
+  const BPM = 168, STEP = 60 / BPM / 4;     // sixteenth notes
+  const ROOTS = [40, 36, 38, 38];           // E  C  D  D
+  const LEAD = [                            // eighth notes; 0 holds the previous note
+    [76, 0, 79, 81, 83, 0, 81, 79],
+    [79, 0, 76, 79, 84, 0, 83, 81],
+    [81, 0, 78, 81, 86, 0, 85, 83],
+    [83, 0, 81, 83, 88, 0, 0, 0],
+  ];
+
+  function powerChord(root, t, len, gain) {
+    const g = audio.createGain();
+    g.gain.setValueAtTime(gain, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    g.connect(guitarIn);
+    for (const [iv, det] of [[0, -8], [7, 8], [12, 0]]) {
+      const o = audio.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.value = midi(root + iv);
+      o.detune.value = det;
+      o.connect(g);
+      o.start(t);
+      o.stop(t + len + 0.05);
+    }
+  }
+
+  function leadNote(n, t, len) {
+    const g = audio.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(0.055, t + 0.01);
+    g.gain.setValueAtTime(0.055, t + len * 0.75);
+    g.gain.exponentialRampToValueAtTime(0.001, t + len);
+    g.connect(metalBus);
+    const lfo = audio.createOscillator();
+    const depth = audio.createGain();
+    lfo.frequency.value = 6;
+    depth.gain.value = 9;
+    lfo.connect(depth);
+    for (const det of [-5, 5]) {
+      const o = audio.createOscillator();
+      o.type = 'square';
+      o.frequency.value = midi(n);
+      o.detune.value = det;
+      depth.connect(o.detune);
+      o.connect(g);
+      o.start(t);
+      o.stop(t + len + 0.05);
+    }
+    lfo.start(t);
+    lfo.stop(t + len + 0.05);
+  }
+
+  function scheduleMetal(horizon) {
+    if (metalNext < audio.currentTime) metalNext = audio.currentTime + 0.05;
+    while (metalNext < horizon) {
+      const t = metalNext, step = metalStep % 64, bar = step >> 4, s = step % 16;
+      const root = ROOTS[bar];
+      // Drums: double kick on eighths, snare on 2 and 4, constant hats
+      if (s % 2 === 0) tone(150, t, { wave: 'sine', decay: 0.14, gain: 0.5, glide: 0.3, bus: metalBus });
+      if (s === 4 || s === 12) noise(0.18, { freq: 1800, q: 0.8, gain: 0.45, at: t, bus: metalBus });
+      noise(0.03, { freq: 9000, q: 1, type: 'highpass', gain: s % 4 === 2 ? 0.12 : 0.06, at: t, bus: metalBus });
+      if (step % 32 === 0) noise(1.2, { freq: 5000, q: 0.5, type: 'highpass', gain: 0.2, decay: 1.2, at: t, bus: metalBus });
+      // Galloping guitar and bass: on each beat, 1 . 3 4
+      const pos = s % 4;
+      if (pos !== 1) {
+        const accent = s === 0;
+        powerChord(root, t, accent ? 0.45 : 0.08, accent ? 0.16 : 0.11);
+        tone(midi(root - 12), t, { wave: 'triangle', decay: 0.1, gain: 0.22, bus: metalBus });
+      }
+      // Lead
+      if (s % 2 === 0) {
+        const e = s >> 1, n = LEAD[bar][e];
+        if (n) {
+          let len = 1;
+          while (e + len < 8 && LEAD[bar][e + len] === 0) len++;
+          leadNote(n, t, len * 2 * STEP);
+        }
+      }
+      metalNext += STEP;
+      metalStep++;
     }
   }
 
@@ -305,6 +454,7 @@
   let state = 'title';
   let game;
   let best = loadBest();
+  let round = 0;             // which ambient song plays rotates with each round
 
   function newGame() {
     return {
@@ -324,6 +474,9 @@
   function startGame() {
     game = newGame();
     state = 'play';
+    round++;
+    setSong(round - 1);
+    setMusicMode('ambient');
     flashMsg('Storms are firing. Go find a tornado.');
   }
 
@@ -333,6 +486,7 @@
     state = 'over';
     if (game.score > best) { best = game.score; saveBest(best); }
     sfx.over();
+    setMusicMode('ambient');
     game.overAt = performance.now();
   }
 
@@ -602,6 +756,7 @@
     });
     keys.zoom = false;
     if (g.tor && g.tor.phase !== 'roping') { g.tor.phase = 'roping'; g.tor.pt = 0; }
+    setMusicMode('ambient');
     sfx.sundown();
   }
 
@@ -867,7 +1022,7 @@
     g.pickup = null;
     g.pickupCd = rand(10, 16);
     g.car.hp = Math.min(100, g.car.hp + 10);
-    if (isFeral()) { flashMsg('FULLY KITTED. The car has gone feral.', 3); sfx.feral(); }
+    if (isFeral()) { flashMsg('FULLY KITTED. The car has gone feral.', 3); sfx.feral(); setMusicMode('metal'); }
     else { flashMsg(UPGRADES[kind].msg, 2.6); sfx.powerup(); }
   }
 
@@ -1753,6 +1908,15 @@
       }
     }
 
+    // Smoke trailing back from the stacks
+    if (feral) {
+      for (let k = 0; k < 5; k++) {
+        const age = (t * 1.6 + k / 5) % 1;
+        ctx.fillStyle = `rgba(70,64,74,${0.45 * (1 - age)})`;
+        ctx.beginPath(); ctx.arc(-30 - age * 34, -62 - lift - age * 16, 3 + age * 7, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
     // Lift-kit struts
     if (lift) {
       ctx.strokeStyle = '#3a3842';
@@ -1805,6 +1969,20 @@
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(-34, -18); ctx.lineTo(35, -18); ctx.stroke();
       ctx.restore();
+    }
+
+    // Riveted armor plates welded over the doors
+    if (feral) {
+      for (const [ax, aw] of [[-22, 13], [-7, 23]]) {
+        ctx.fillStyle = '#6e6c7a';
+        ctx.fillRect(ax, -22, aw, 9);
+        ctx.fillStyle = '#9d9aa8';
+        ctx.fillRect(ax, -22, aw, 1.5);
+        ctx.strokeStyle = '#2a2830'; ctx.lineWidth = 1.2;
+        ctx.strokeRect(ax, -22, aw, 9);
+        ctx.fillStyle = '#2a2830';
+        for (let rx = ax + 2; rx < ax + aw - 1; rx += 4) { ctx.fillRect(rx, -20.5, 1.3, 1.3); ctx.fillRect(rx, -15.5, 1.3, 1.3); }
+      }
     }
 
     // Rear spoiler lip
@@ -1893,12 +2071,54 @@
       ctx.beginPath(); ctx.moveTo(-24, -39.5); ctx.lineTo(-24, -37); ctx.moveTo(2, -39.5); ctx.lineTo(2, -37); ctx.stroke();
     }
 
-    // Chase antenna
+    // Welded roll cage with spotlights and jerry cans
+    if (feral) {
+      const ct = roofTop - 13;
+      ctx.fillStyle = '#4d6b3a';
+      ctx.fillRect(-33, ct + 3, 7, 10);
+      ctx.fillStyle = '#a83a2a';
+      ctx.fillRect(-25, ct + 4, 6, 9);
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillRect(-32, ct + 4, 2, 8);
+      ctx.strokeStyle = '#2e2c36';
+      ctx.lineWidth = 2.6;
+      ctx.lineJoin = 'miter';
+      ctx.beginPath();
+      ctx.moveTo(-34, roofTop); ctx.lineTo(-32, ct); ctx.lineTo(12, ct); ctx.lineTo(16, roofTop + 4);
+      ctx.moveTo(-10, ct); ctx.lineTo(-10, roofTop);
+      ctx.moveTo(-32, ct); ctx.lineTo(-10, roofTop);
+      ctx.moveTo(-10, ct); ctx.lineTo(12, roofTop);
+      ctx.stroke();
+      ctx.lineJoin = 'round';
+      for (const lx of [2, 10]) {
+        const beam2 = ctx.createRadialGradient(lx + 2, ct - 3, 1, lx + 2, ct - 3, 12);
+        beam2.addColorStop(0, 'rgba(255,240,170,0.7)');
+        beam2.addColorStop(1, 'rgba(255,240,170,0)');
+        ctx.fillStyle = beam2;
+        ctx.fillRect(lx - 10, ct - 15, 24, 24);
+        ctx.fillStyle = '#2e2c36';
+        ctx.beginPath(); ctx.arc(lx, ct - 3, 3.6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff4c0';
+        ctx.beginPath(); ctx.arc(lx + 0.8, ct - 3, 2.2, 0, Math.PI * 2); ctx.fill();
+      }
+      roofTop = ct;
+    }
+
+    // Chase antenna (flying a tattered flag once feral)
     ctx.strokeStyle = '#2a2830';
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(-18, roofTop + 2); ctx.lineTo(-24, roofTop - 15); ctx.stroke();
-    ctx.fillStyle = '#ff4a3d';
-    ctx.beginPath(); ctx.arc(-24, roofTop - 15, 1.8, 0, Math.PI * 2); ctx.fill();
+    if (feral) {
+      const wv = Math.sin(t * 9) * 2;
+      ctx.fillStyle = '#c0281f';
+      ctx.beginPath();
+      ctx.moveTo(-24, roofTop - 15); ctx.lineTo(-38, roofTop - 14 + wv); ctx.lineTo(-33, roofTop - 11 + wv * 0.5);
+      ctx.lineTo(-39, roofTop - 8 + wv); ctx.lineTo(-23, roofTop - 9);
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillStyle = '#ff4a3d';
+      ctx.beginPath(); ctx.arc(-24, roofTop - 15, 1.8, 0, Math.PI * 2); ctx.fill();
+    }
 
     // Spinning radar dish
     if (up.radar) {
@@ -1924,20 +2144,44 @@
     ctx.fillStyle = '#fff6cc';
     ctx.beginPath(); ctx.moveTo(27, -20.5); ctx.lineTo(34, -18.5); ctx.lineTo(34.5, -15); ctx.lineTo(28, -16.5); ctx.closePath(); ctx.fill();
 
-    // Fully kitted: spiked ram bar and a spare on the hatch
+    // Fully kitted: supercharger through the hood, slatted plow with long
+    // spikes, a spare on the hatch and a dragging chain.
     if (feral) {
-      ctx.fillStyle = '#3a3842';
-      ctx.fillRect(34, -19, 4, 12);
-      ctx.fillRect(36, -17, 7, 2.5);
-      ctx.fillRect(36, -11, 7, 2.5);
+      // Blower
+      ctx.fillStyle = '#2e2c36';
+      ctx.fillRect(19, -31, 11, 10);
+      ctx.fillStyle = '#b8b6c4';
+      ctx.fillRect(17, -36, 15, 5);
+      ctx.fillStyle = '#e8e6f0';
+      ctx.fillRect(17, -36, 15, 1.5);
+      ctx.fillStyle = '#2e2c36';
+      for (let k = 0; k < 3; k++) ctx.fillRect(19 + k * 4.5, -35, 2, 3);
+      ctx.strokeStyle = '#6d6a7c'; ctx.lineWidth = 1.2;
+      const belt = (t * 30) % 4;
+      ctx.beginPath();
+      for (let by = -30 + belt; by < -21; by += 4) { ctx.moveTo(20, by); ctx.lineTo(29, by); }
+      ctx.stroke();
+      // Plow
+      ctx.strokeStyle = '#3a3842'; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.moveTo(34, -20); ctx.lineTo(42, -20); ctx.lineTo(50, lift - 2);
+      for (let k = 0; k < 4; k++) { ctx.moveTo(35, -16 + k * 4.5); ctx.lineTo(44 + k * 2, -16 + k * 4.5); }
+      ctx.stroke();
       ctx.fillStyle = '#d6d4de';
-      for (const sy of [-17, -11]) {
-        ctx.beginPath(); ctx.moveTo(43, sy - 1); ctx.lineTo(50, sy + 1.25); ctx.lineTo(43, sy + 3.5); ctx.closePath(); ctx.fill();
+      for (const sy of [-19, -12]) {
+        ctx.beginPath(); ctx.moveTo(42, sy - 1.5); ctx.lineTo(58, sy + 1); ctx.lineTo(42, sy + 3.5); ctx.closePath(); ctx.fill();
       }
+      // Spare on the hatch
       ctx.fillStyle = '#26242c';
       ctx.beginPath(); ctx.arc(-37, -23, 7, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#8f8c9c';
       ctx.beginPath(); ctx.arc(-37, -23, 3, 0, Math.PI * 2); ctx.fill();
+      // Chain swinging from the rear bumper
+      ctx.fillStyle = '#8f8c9c';
+      for (let k = 0; k < 6; k++) {
+        const sw = Math.sin(t * 6 + k * 0.4) * k * 0.8;
+        ctx.fillRect(-35 - k * 2.2 + sw * 0.3, -11 + k * 1.6, 2, 2);
+      }
     }
     ctx.restore(); // end lift
 
@@ -1946,6 +2190,18 @@
       const a = c.wheel * c.dir;
       ctx.fillStyle = '#26242c';
       ctx.beginPath(); ctx.arc(wx, wy, wr, 0, Math.PI * 2); ctx.fill();
+      if (feral) {
+        ctx.fillStyle = '#d6d4de';
+        for (let k = 0; k < 6; k++) {
+          const ang = a + k * 1.047 + 0.3;
+          const ox = wx + Math.cos(ang) * (wr + 1), oy = wy + Math.sin(ang) * (wr + 1);
+          ctx.beginPath();
+          ctx.moveTo(ox + Math.cos(ang) * 4, oy + Math.sin(ang) * 4);
+          ctx.lineTo(ox + Math.cos(ang + 1.6) * 2, oy + Math.sin(ang + 1.6) * 2);
+          ctx.lineTo(ox + Math.cos(ang - 1.6) * 2, oy + Math.sin(ang - 1.6) * 2);
+          ctx.closePath(); ctx.fill();
+        }
+      }
       if (up.tires) {
         ctx.fillStyle = '#3c3a44';
         for (let k = 0; k < 10; k++) {
@@ -2289,5 +2545,5 @@
   requestAnimationFrame(frame);
 
   // Exposed for automated tests.
-  window.__dinnerDate = { get state() { return state; }, get game() { return game; } };
+  window.__dinnerDate = { get state() { return state; }, get game() { return game; }, get music() { return { musicMode, songIndex, round, ctx: audio && audio.state }; } };
 })();
