@@ -11,6 +11,7 @@
   const SW = 384, SH = 216, PX = SW / W;
   const ZOOM_Y = 250;       // the viewfinder zooms toward this height
   const MAX_ZOOM = 3;
+  const TOUCH = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
   const HORIZON = 300;      // where the field meets the sky
   const CLOUD_BASE = 118;   // underside of the storm
   const TOR_GROUND = 392;   // where tornadoes touch the field
@@ -415,12 +416,14 @@
     const down = (e) => {
       e.preventDefault();
       btn.classList.add('active');
-      if (k === 'shutter') action(); else keys[k] = true;
+      if (k === 'shutter') action();
+      else if (k === 'pause') { initAudio(); togglePause(); }
+      else keys[k] = true;
     };
     const up = (e) => {
       e.preventDefault();
       btn.classList.remove('active');
-      if (k !== 'shutter') keys[k] = false;
+      if (k !== 'shutter' && k !== 'pause') keys[k] = false;
     };
     btn.addEventListener('pointerdown', down);
     btn.addEventListener('pointerup', up);
@@ -435,9 +438,28 @@
   });
   window.addEventListener('blur', () => { keys.left = keys.right = keys.zoom = false; });
 
+  // Phones: pause when turned upright, and make sure audio unlocks on iOS.
+  if (TOUCH && window.matchMedia) {
+    window.matchMedia('(orientation: portrait)').addEventListener('change', (e) => {
+      keys.left = keys.right = keys.zoom = false;
+      document.querySelectorAll('.controls button.active').forEach((b) => b.classList.remove('active'));
+      if (e.matches && state === 'play') togglePause();
+    });
+  }
+  document.addEventListener('touchend', () => { if (audio && audio.state !== 'running') audio.resume(); }, { passive: true });
+
+  function goFullscreen() {
+    if (!TOUCH || document.fullscreenElement) return;
+    const el = document.documentElement;
+    if (!el.requestFullscreen) return;
+    el.requestFullscreen({ navigationUI: 'hide' })
+      .then(() => screen.orientation && screen.orientation.lock && screen.orientation.lock('landscape'))
+      .catch(() => {});
+  }
+
   function action() {
     initAudio();
-    if (state === 'title') startGame();
+    if (state === 'title') { goFullscreen(); startGame(); }
     else if (state === 'play') takePhoto();
     else if (state === 'paused') togglePause();
     else if (state === 'dialog') advanceDialog();
@@ -987,7 +1009,7 @@
     if (st > 1) text(`SCORE ${g.score}   FRAMES ${g.frames}`, SW / 2, 8, { align: 'center', color: '#ffe680', alpha: Math.min(1, st - 1) });
     if (g.msgT > 0) text(g.msg, SW / 2, 30, { align: 'center', alpha: Math.min(1, g.msgT * 2) });
     if (st > CHEERS_AT + 2 && g.swept < 0 && Math.floor(performance.now() / 600) % 2) {
-      text('SPACE: CALL IT A DAY', SW / 2, SH - 14, { align: 'center', color: '#ffe680' });
+      text(TOUCH ? 'TAP: CALL IT A DAY' : 'SPACE: CALL IT A DAY', SW / 2, SH - 14, { align: 'center', color: '#ffe680' });
     }
   }
 
@@ -1350,11 +1372,11 @@
     if (state === 'dialog' && g.dialog) drawDialog(g.dialog);
     if (state === 'sunset') drawSunsetOverlay(g);
     if (state === 'title') drawTitle();
-    if (state === 'paused') drawCenter('PAUSED', 'Press P or tap to resume');
+    if (state === 'paused') drawCenter('PAUSED', TOUCH ? 'Tap to resume' : 'Press P or tap to resume');
     if (state === 'over') {
       drawCenter(g.endReason, `${g.frames} frames exposed. Score ${g.score}. Best ${best}.`);
       if (performance.now() - g.overAt > 1000 && Math.floor(performance.now() / 500) % 2) {
-        text('PRESS SPACE OR TAP TO CHASE AGAIN', SW / 2, SH / 2 + 26, { align: 'center', color: '#ffe680' });
+        text(TOUCH ? 'TAP TO CHASE AGAIN' : 'PRESS SPACE OR TAP TO CHASE AGAIN', SW / 2, SH / 2 + 26, { align: 'center', color: '#ffe680' });
       }
     }
   }
@@ -2358,19 +2380,21 @@
 
     if (state === 'dialog') return;
 
-    // Car health
-    text('CAR', 6, SH - 13);
+    // Car health (top right on touch screens, where thumbs don't cover it)
+    const hy = TOUCH ? 18 : SH - 13, hx = TOUCH ? SW - 96 : 6;
+    text('CAR', hx, hy);
     ctx.fillStyle = SHADOW;
-    ctx.fillRect(33, SH - 14, 62, 10);
+    ctx.fillRect(hx + 27, hy - 1, 62, 10);
     ctx.fillStyle = '#4a3a66';
-    ctx.fillRect(34, SH - 13, 60, 8);
+    ctx.fillRect(hx + 28, hy, 60, 8);
     if (g.car.hp > 0) {
       const w = Math.max(1, Math.round(60 * g.car.hp / 100));
       ctx.fillStyle = g.car.hp > 30 ? '#5cbf62' : '#e8281f';
-      ctx.fillRect(34, SH - 13, w, 8);
+      ctx.fillRect(hx + 28, hy, w, 8);
       ctx.fillStyle = g.car.hp > 30 ? '#b8f0a0' : '#ff9a8a';
-      ctx.fillRect(34, SH - 13, w, 2);
+      ctx.fillRect(hx + 28, hy, w, 2);
     }
+    const ry = TOUCH ? 30 : SH - 13;
 
     if (g.up.radar) drawRadar(g);
 
@@ -2390,7 +2414,7 @@
     if (T && T.alpha > 0.2) {
       const gx = tornadoGroundX(T);
       const d = Math.abs(g.car.x - gx);
-      text(`RANGE ${(d * MI_PER_PX).toFixed(1)}MI`, SW - 6, SH - 13, { align: 'right' });
+      text(`RANGE ${(d * MI_PER_PX).toFixed(1)}MI`, SW - 6, ry, { align: 'right' });
       const zx = screenXOf(gx);
       if (zx < 0 || zx > W) {
         const isLeft = zx < 0;
@@ -2402,7 +2426,7 @@
         text(`${(d * MI_PER_PX).toFixed(1)}`, ax + (isLeft ? 2 : -2), ay + 10, { align: isLeft ? 'left' : 'right' });
       }
     } else {
-      text('SCANNING...', SW - 6, SH - 13, { align: 'right' });
+      text('SCANNING...', SW - 6, ry, { align: 'right' });
     }
 
     if (g.msgT > 0) {
@@ -2524,7 +2548,7 @@
     text('WITH THE SUBLIME', SW / 2, 68, { size: 16, align: 'center', color: '#ff4a3d', outline: true });
     text('Drive close. Take the picture.', SW / 2, 100, { align: 'center' });
     text('Get out alive.', SW / 2, 112, { align: 'center' });
-    if (Math.floor(performance.now() / 500) % 2) text('PRESS SPACE OR TAP', SW / 2, 140, { align: 'center', color: '#ffe680' });
+    if (Math.floor(performance.now() / 500) % 2) text(TOUCH ? 'TAP TO START' : 'PRESS SPACE OR TAP', SW / 2, 140, { align: 'center', color: '#ffe680' });
     if (best > 0) text(`BEST ${best}`, SW / 2, 158, { align: 'center' });
   }
 
@@ -2540,6 +2564,7 @@
     if (state === 'dialog') updateDialog(dt);
     else if (state !== 'paused') update(dt);
     draw();
+    if (document.body.dataset.state !== state) document.body.dataset.state = state;
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
