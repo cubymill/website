@@ -481,6 +481,36 @@
       text: 'All that once was directly lived has become mere representation.' },
     { who: 'FREDRIC JAMESON', src: 'The Seeds of Time, 1994', tags: ['hurt', 'any'],
       text: 'It seems to be easier for us today to imagine the thoroughgoing deterioration of the earth and of nature than the breakdown of late capitalism.' },
+    { who: 'ROLAND BARTHES', src: 'Camera Lucida, 1980', tags: ['rope', 'hurt'],
+      text: 'Death is the eidos of that Photograph.' },
+    { who: 'ROLAND BARTHES', src: 'Camera Lucida, 1980', tags: ['close', 'any'],
+      text: 'The photograph is literally an emanation of the referent.' },
+    { who: 'ROLAND BARTHES', src: 'Camera Lucida, 1980', tags: ['close', 'score'],
+      text: 'Society is concerned to tame the Photograph, to temper the madness which keeps threatening to explode in the face of whoever looks at it.' },
+    { who: 'SUSAN SONTAG', src: 'On Photography, 1977', tags: ['rope', 'any'],
+      text: 'Photography is an elegiac art, a twilight art. Most subjects photographed are, just by virtue of being photographed, touched with pathos.' },
+    { who: 'SUSAN SONTAG', src: 'On Photography, 1977', tags: ['far', 'miss'],
+      text: 'The camera makes everyone a tourist in other people\'s reality, and eventually in one\'s own.' },
+    { who: 'SUSAN SONTAG', src: 'On Photography, 1977', tags: ['score'],
+      text: 'To collect photographs is to collect the world.' },
+    { who: 'SUSAN SONTAG', src: 'On Photography, 1977', tags: ['close', 'zoom'],
+      text: 'There is an aggression implicit in every use of the camera.' },
+    { who: 'SUSAN SONTAG', src: 'Regarding the Pain of Others, 2003', tags: ['far', 'any'],
+      text: 'Being a spectator of calamities taking place in another country is a quintessential modern experience.' },
+    { who: 'WALTER BENJAMIN', src: 'The Work of Art in the Age of Mechanical Reproduction, 1936', tags: ['zoom', 'far'],
+      text: 'We define the aura of the latter as the unique phenomenon of a distance, however close it may be.' },
+    { who: 'EDMUND BURKE', src: 'A Philosophical Enquiry, 1757', tags: ['close', 'lightning'],
+      text: 'The passion caused by the great and sublime in nature, when those causes operate most powerfully, is Astonishment; and astonishment is that state of the soul, in which all its motions are suspended, with some degree of horror.' },
+    { who: 'EDMUND BURKE', src: 'A Philosophical Enquiry, 1757', tags: ['hurt', 'close'],
+      text: 'No passion so effectually robs the mind of all its powers of acting and reasoning as fear.' },
+    { who: 'IMMANUEL KANT', src: 'Critique of Judgment, 1790', tags: ['far', 'any'],
+      text: 'The sublime is to be found in a formless object, so far as in it or by occasion of it boundlessness is represented, and yet its totality is also present to thought.' },
+    { who: 'JEAN BAUDRILLARD', src: 'Simulacra and Simulation, 1981', tags: ['empty', 'any'],
+      text: 'We live in a world where there is more and more information, and less and less meaning.' },
+    { who: 'GUY DEBORD', src: 'The Society of the Spectacle, 1967', tags: ['empty', 'miss'],
+      text: 'In a world that really has been turned on its head, truth is a moment of falsehood.' },
+    { who: 'ADORNO & HORKHEIMER', src: 'Dialectic of Enlightenment, 1944', tags: ['hurt', 'score'],
+      text: 'The fully enlightened earth radiates disaster triumphant.' },
   ];
 
   function pickQuote(tag) {
@@ -641,7 +671,7 @@
       const h = g.hail[i];
       h.x += h.vx * dt; h.y += h.vy * dt;
       if (state === 'play' && h.y > ROAD_Y - 30 && h.y < ROAD_Y && Math.abs(h.x - c.x) < 30) {
-        damage(2);
+        damage(1);
         if (T && !T.hailWarned) { T.hailWarned = true; flashMsg('Hail! Get out of the core.'); }
         g.hailSound -= 1;
         if (g.hailSound < 0) { sfx.hail(); g.hailSound = 1; }
@@ -671,7 +701,7 @@
       const d = Math.abs(c.x - gx);
       const funnelW = funnelAt(T, 1, g.t).w;
       if (state === 'play' && d < funnelW * 0.5 + 24) {
-        damage((28 + T.ef * 9) * dt, true);
+        damage((15 + T.ef * 5) * dt, true);
         c.vx += rand(-900, 900) * dt;
         g.shake = Math.max(g.shake, 8);
       }
@@ -680,7 +710,7 @@
       const p = g.debris[i];
       p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
       if (state === 'play' && p.y > ROAD_Y - 30 && p.y < ROAD_Y && Math.abs(p.x - c.x) < 32) {
-        damage(5);
+        damage(3);
         sfx.hit();
         g.shake = Math.max(g.shake, 6);
         g.debris.splice(i, 1);
