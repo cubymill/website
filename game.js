@@ -216,6 +216,11 @@
     open() { tone(midi(81), now(), { wave: 'triangle', decay: 0.1, gain: 0.1 }); tone(midi(88), now() + 0.07, { wave: 'triangle', decay: 0.2, gain: 0.1 }); },
     blip() { tone(midi(93), now(), { decay: 0.025, gain: 0.025 }); },
     close() { tone(midi(86), now(), { wave: 'triangle', decay: 0.08, gain: 0.08 }); tone(midi(79), now() + 0.06, { wave: 'triangle', decay: 0.12, gain: 0.08 }); },
+    powerup() { [72, 76, 79, 84].forEach((n, i) => tone(midi(n), now() + i * 0.06, { decay: 0.1, gain: 0.07 })); },
+    feral() {
+      noise(0.6, { freq: 160, q: 1, gain: 0.4, type: 'lowpass', decay: 0.6 });
+      [60, 63, 67, 70, 72, 75, 79].forEach((n, i) => tone(midi(n), now() + 0.1 + i * 0.07, { decay: 0.14, gain: 0.07 }));
+    },
     over() { [74, 69, 66, 62].forEach((n, i) => tone(midi(n), now() + i * 0.28, { wave: 'bell', decay: 1.6, gain: 0.12 })); },
   };
 
@@ -299,6 +304,7 @@
       flash: 0, lightning: 0, lightningCd: rand(3, 7), bolt: null,
       shutterCd: 0, msg: '', msgT: 0, shake: 0,
       overAt: 0, ending: 0, endReason: '', hailSound: 0,
+      up: { nets: false, roof: false, tires: false, radar: false }, pickup: null, pickupCd: 6,
       zoom: 1, aimX: W / 2, dialog: null, dialogDelay: 0, dialogQuote: null, usedQuotes: new Set(),
     };
   }
@@ -564,6 +570,41 @@
     sfx.close();
   }
 
+  // ---------------------------------------------------------------- upgrades
+  // Drive over a pickup to bolt it onto the car.
+  const UPGRADES = {
+    nets: { label: 'NETS', msg: 'WINDOW NETS. Hail hurts less.' },
+    roof: { label: 'ROOF', msg: 'ROOF ARMOR. Debris hurts less.' },
+    tires: { label: 'TIRES', msg: 'BIG TIRES + LIFT. More speed.' },
+    radar: { label: 'RADAR', msg: 'RADAR ONLINE. Storms tracked.' },
+  };
+  const isFeral = () => game.up.nets && game.up.roof && game.up.tires && game.up.radar;
+
+  function updatePickups(dt) {
+    const g = game, c = g.car;
+    const remaining = Object.keys(UPGRADES).filter((k) => !g.up[k]);
+    if (!g.pickup && remaining.length) {
+      g.pickupCd -= dt;
+      if (g.pickupCd <= 0) {
+        g.pickup = {
+          kind: remaining[(Math.random() * remaining.length) | 0],
+          x: c.x + (Math.random() < 0.5 ? -1 : 1) * rand(500, 900),
+        };
+      }
+    }
+    if (g.pickup && Math.abs(g.pickup.x - c.x) < 34) installUpgrade(g.pickup.kind);
+  }
+
+  function installUpgrade(kind) {
+    const g = game;
+    g.up[kind] = true;
+    g.pickup = null;
+    g.pickupCd = rand(10, 16);
+    g.car.hp = Math.min(100, g.car.hp + 10);
+    if (isFeral()) { flashMsg('FULLY KITTED. The car has gone feral.', 3); sfx.feral(); }
+    else { flashMsg(UPGRADES[kind].msg, 2.6); sfx.powerup(); }
+  }
+
   // ---------------------------------------------------------------- photos
   function takePhoto() {
     if (game.shutterCd > 0 || game.film <= 0 || game.ending > 0) return;
@@ -628,6 +669,7 @@
       if (sx > -60 && sx < W + 60) aimTarget = clamp(sx, 120, W - 120);
     }
     g.aimX += (aimTarget - g.aimX) * Math.min(1, dt * 2.5);
+    if (state === 'play') updatePickups(dt);
     if (state === 'play' && g.dialogDelay > 0) {
       g.dialogDelay -= dt;
       if (g.dialogDelay <= 0) openDialog(g.dialogQuote);
@@ -637,12 +679,13 @@
     if (state === 'play') {
       const input = (keys.right ? 1 : 0) - (keys.left ? 1 : 0);
       if (input) {
-        c.vx += input * 640 * dt;
+        c.vx += input * (g.up.tires ? 780 : 640) * dt;
         c.dir = input;
       } else {
         c.vx -= Math.sign(c.vx) * Math.min(Math.abs(c.vx), 420 * dt);
       }
-      c.vx = clamp(c.vx, -340, 340);
+      const vmax = g.up.tires ? 410 : 340;
+      c.vx = clamp(c.vx, -vmax, vmax);
     }
     c.x += c.vx * dt;
     c.wheel += c.vx * dt / 8;
@@ -671,7 +714,7 @@
       const h = g.hail[i];
       h.x += h.vx * dt; h.y += h.vy * dt;
       if (state === 'play' && h.y > ROAD_Y - 30 && h.y < ROAD_Y && Math.abs(h.x - c.x) < 30) {
-        damage(1);
+        damage(g.up.nets ? 0.35 : 1);
         if (T && !T.hailWarned) { T.hailWarned = true; flashMsg('Hail! Get out of the core.'); }
         g.hailSound -= 1;
         if (g.hailSound < 0) { sfx.hail(); g.hailSound = 1; }
@@ -701,8 +744,8 @@
       const d = Math.abs(c.x - gx);
       const funnelW = funnelAt(T, 1, g.t).w;
       if (state === 'play' && d < funnelW * 0.5 + 24) {
-        damage((15 + T.ef * 5) * dt, true);
-        c.vx += rand(-900, 900) * dt;
+        damage((15 + T.ef * 5) * dt * (g.up.tires ? 0.7 : 1), true);
+        c.vx += rand(-900, 900) * dt * (g.up.tires ? 0.5 : 1);
         g.shake = Math.max(g.shake, 8);
       }
     }
@@ -710,7 +753,7 @@
       const p = g.debris[i];
       p.vy += 420 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt;
       if (state === 'play' && p.y > ROAD_Y - 30 && p.y < ROAD_Y && Math.abs(p.x - c.x) < 32) {
-        damage(3);
+        damage(g.up.roof ? 1.2 : 3);
         sfx.hit();
         g.shake = Math.max(g.shake, 6);
         g.debris.splice(i, 1);
@@ -845,6 +888,7 @@
     drawLightning(g, cam);
     drawPoles(cam);
     drawRoad(cam);
+    drawPickup(g, cam);
     drawCar(g.car, cam);
     drawHail(g, cam);
     drawDebris(g, cam);
@@ -1297,12 +1341,18 @@
   }
 
   function drawCar(c, cam) {
+    const up = game.up;
+    const feral = isFeral();
+    const lift = up.tires ? 7 : 0;
+    const wr = up.tires ? 11 : 8;          // wheel radius
+    const wy = up.tires ? -wr + 1 : -6;    // wheel centre
     const sx = c.x - cam;
     const y = ROAD_Y;
+    const t = game.t;
 
     // Soft shadow
     ctx.fillStyle = 'rgba(40,30,60,0.28)';
-    ctx.beginPath(); ctx.ellipse(sx, y + 1, 38, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx, y + 1, feral ? 46 : 38, 4.5, 0, 0, Math.PI * 2); ctx.fill();
 
     ctx.save();
     ctx.translate(sx, y);
@@ -1310,6 +1360,33 @@
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
     const hurt = c.hurt > 0 && Math.floor(c.hurt * 30) % 2;
+
+    // Exhaust stacks with flames (fully kitted only), behind the body.
+    if (feral) {
+      for (const [px, top] of [[-31, -58], [-26, -54]]) {
+        ctx.fillStyle = '#5b5866';
+        ctx.fillRect(px - 2.5, top - lift, 5, 46);
+        ctx.fillStyle = '#9d9aa8';
+        ctx.fillRect(px - 2.5, top - lift, 1.5, 46);
+        const fl = 8 + Math.random() * 10;
+        ctx.fillStyle = '#ff8a2a';
+        ctx.beginPath(); ctx.moveTo(px - 4, top - lift); ctx.lineTo(px - 1, top - lift - fl); ctx.lineTo(px + 4, top - lift); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#ffe36b';
+        ctx.beginPath(); ctx.moveTo(px - 2, top - lift); ctx.lineTo(px, top - lift - fl * 0.55); ctx.lineTo(px + 2, top - lift); ctx.closePath(); ctx.fill();
+      }
+    }
+
+    // Lift-kit struts
+    if (lift) {
+      ctx.strokeStyle = '#3a3842';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      for (const wx of [-21, 22]) { ctx.moveTo(wx - 3, wy); ctx.lineTo(wx - 5, -13 - lift + 4); ctx.moveTo(wx + 3, wy); ctx.lineTo(wx + 5, -13 - lift + 4); }
+      ctx.stroke();
+    }
+
+    ctx.save();
+    ctx.translate(0, -lift);
 
     // Body: early-2000s Pontiac Vibe silhouette (front faces +x).
     const body = () => {
@@ -1328,9 +1405,9 @@
       ctx.closePath();
     };
     const paint = ctx.createLinearGradient(0, -37, 0, -9);
-    paint.addColorStop(0, hurt ? '#ffffff' : '#ff6a5a');
-    paint.addColorStop(0.45, hurt ? '#ffffff' : '#e8281f');
-    paint.addColorStop(1, hurt ? '#ffffff' : '#a9121a');
+    if (hurt) { paint.addColorStop(0, '#ffffff'); paint.addColorStop(1, '#ffffff'); }
+    else if (feral) { paint.addColorStop(0, '#d8564a'); paint.addColorStop(0.45, '#a8281f'); paint.addColorStop(1, '#6c1814'); }
+    else { paint.addColorStop(0, '#ff6a5a'); paint.addColorStop(0.45, '#e8281f'); paint.addColorStop(1, '#a9121a'); }
     body();
     ctx.fillStyle = paint;
     ctx.fill();
@@ -1338,12 +1415,27 @@
     ctx.strokeStyle = '#5a0a10';
     ctx.stroke();
 
+    // Rust and weld scars once it has gone feral
+    if (feral && !hurt) {
+      ctx.save();
+      body();
+      ctx.clip();
+      ctx.fillStyle = 'rgba(132,70,30,0.6)';
+      for (const [rx, ry, r] of [[-26, -15, 5], [-4, -12, 4], [12, -16, 3.5], [28, -14, 3], [-15, -27, 2.5]]) {
+        ctx.beginPath(); ctx.ellipse(rx, ry, r * 1.4, r, 0.3, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.strokeStyle = 'rgba(210,200,190,0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(-34, -18); ctx.lineTo(35, -18); ctx.stroke();
+      ctx.restore();
+    }
+
     // Rear spoiler lip
-    ctx.fillStyle = hurt ? '#ffffff' : '#c81b1d';
+    ctx.fillStyle = hurt ? '#ffffff' : feral ? '#8e2a22' : '#c81b1d';
     ctx.beginPath();
     ctx.moveTo(-27, -37); ctx.lineTo(-37, -38.5); ctx.lineTo(-35.5, -35); ctx.lineTo(-29, -35);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = '#6e0c12'; ctx.lineWidth = 1; ctx.stroke();
+    ctx.strokeStyle = '#5a0a10'; ctx.lineWidth = 1; ctx.stroke();
 
     // Black lower cladding
     ctx.fillStyle = '#33313b';
@@ -1370,10 +1462,24 @@
     for (const x0 of [-28, -16, -2, 8]) {
       ctx.beginPath(); ctx.moveTo(x0, -24); ctx.lineTo(x0 + 6, -33); ctx.lineTo(x0 + 9, -33); ctx.lineTo(x0 + 3, -24); ctx.closePath(); ctx.fill();
     }
+    // Reinforcement netting
+    if (up.nets) {
+      ctx.strokeStyle = '#1e1c24';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      for (let k = -50; k < 40; k += 4.5) { ctx.moveTo(k, -22); ctx.lineTo(k + 12, -35); ctx.moveTo(k, -35); ctx.lineTo(k + 12, -22); }
+      ctx.stroke();
+    }
     ctx.restore();
+    if (up.nets) {
+      ctx.strokeStyle = '#1e1c24';
+      ctx.lineWidth = 1.6;
+      windows();
+      ctx.stroke();
+    }
 
     // Glossy highlights along the roof and shoulder
-    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.strokeStyle = feral ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.55)';
     ctx.lineWidth = 1.6;
     ctx.beginPath(); ctx.moveTo(-24, -35.5); ctx.lineTo(3, -35.5); ctx.stroke();
     ctx.strokeStyle = 'rgba(255,255,255,0.3)';
@@ -1387,16 +1493,48 @@
     ctx.fillRect(-14, -21.5, 4, 1.6);
     ctx.fillRect(9, -21.5, 4, 1.6);
 
-    // Roof rails and the chase antenna
+    // Roof: steel sheeting, or the stock roof rails
+    let roofTop = -39.5;
+    if (up.roof) {
+      ctx.fillStyle = '#2a2830';
+      ctx.fillRect(-33, -45, 44, 9);
+      const steel = ctx.createLinearGradient(0, -44, 0, -37);
+      steel.addColorStop(0, '#d9d8e2');
+      steel.addColorStop(1, '#7f7d8c');
+      ctx.fillStyle = steel;
+      ctx.fillRect(-32, -44, 42, 7);
+      ctx.fillStyle = '#4a4856';
+      for (let rx = -29; rx <= 8; rx += 6) { ctx.fillRect(rx, -42, 1.6, 1.6); ctx.fillRect(rx, -39, 1.6, 1.6); }
+      ctx.strokeStyle = 'rgba(60,58,70,0.6)';
+      ctx.beginPath(); ctx.moveTo(-17, -44); ctx.lineTo(-17, -37); ctx.moveTo(-3, -44); ctx.lineTo(-3, -37); ctx.stroke();
+      roofTop = -45;
+    } else {
+      ctx.strokeStyle = '#2a2830';
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(-26, -39.5); ctx.lineTo(4, -39.5); ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(-24, -39.5); ctx.lineTo(-24, -37); ctx.moveTo(2, -39.5); ctx.lineTo(2, -37); ctx.stroke();
+    }
+
+    // Chase antenna
     ctx.strokeStyle = '#2a2830';
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.moveTo(-26, -39.5); ctx.lineTo(4, -39.5); ctx.stroke();
-    ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(-24, -39.5); ctx.lineTo(-24, -37); ctx.moveTo(2, -39.5); ctx.lineTo(2, -37); ctx.stroke();
     ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(-18, -37); ctx.lineTo(-24, -54); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-18, roofTop + 2); ctx.lineTo(-24, roofTop - 15); ctx.stroke();
     ctx.fillStyle = '#ff4a3d';
-    ctx.beginPath(); ctx.arc(-24, -54, 1.8, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(-24, roofTop - 15, 1.8, 0, Math.PI * 2); ctx.fill();
+
+    // Spinning radar dish
+    if (up.radar) {
+      const rx = -4, ry = roofTop - 8;
+      ctx.fillStyle = '#4a4856';
+      ctx.fillRect(rx - 1, ry, 2.5, 8);
+      const spin = Math.cos(t * 5);
+      ctx.fillStyle = spin > 0 ? '#f2f1f7' : '#b4b2c2';
+      ctx.strokeStyle = '#3a3842';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.ellipse(rx, ry, Math.max(1.5, 9 * Math.abs(spin)), 3.5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      if (Math.floor(t * 3) % 2) { ctx.fillStyle = '#7dff8a'; ctx.beginPath(); ctx.arc(rx, ry - 4, 1.6, 0, Math.PI * 2); ctx.fill(); }
+    }
 
     // Lights
     ctx.fillStyle = '#ff9a86';
@@ -1409,24 +1547,101 @@
     ctx.fillStyle = '#fff6cc';
     ctx.beginPath(); ctx.moveTo(27, -20.5); ctx.lineTo(34, -18.5); ctx.lineTo(34.5, -15); ctx.lineTo(28, -16.5); ctx.closePath(); ctx.fill();
 
-    // Wheels with shiny hubcaps
-    for (const wx of [-21, 22]) {
+    // Fully kitted: spiked ram bar and a spare on the hatch
+    if (feral) {
+      ctx.fillStyle = '#3a3842';
+      ctx.fillRect(34, -19, 4, 12);
+      ctx.fillRect(36, -17, 7, 2.5);
+      ctx.fillRect(36, -11, 7, 2.5);
+      ctx.fillStyle = '#d6d4de';
+      for (const sy of [-17, -11]) {
+        ctx.beginPath(); ctx.moveTo(43, sy - 1); ctx.lineTo(50, sy + 1.25); ctx.lineTo(43, sy + 3.5); ctx.closePath(); ctx.fill();
+      }
       ctx.fillStyle = '#26242c';
-      ctx.beginPath(); ctx.arc(wx, -6, 8, 0, Math.PI * 2); ctx.fill();
-      const hub = ctx.createRadialGradient(wx - 1.5, -7.5, 0.5, wx, -6, 4.5);
+      ctx.beginPath(); ctx.arc(-37, -23, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#8f8c9c';
+      ctx.beginPath(); ctx.arc(-37, -23, 3, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore(); // end lift
+
+    // Wheels with shiny hubcaps (knobby off-road tyres once upgraded)
+    for (const wx of [-21, 22]) {
+      const a = c.wheel * c.dir;
+      ctx.fillStyle = '#26242c';
+      ctx.beginPath(); ctx.arc(wx, wy, wr, 0, Math.PI * 2); ctx.fill();
+      if (up.tires) {
+        ctx.fillStyle = '#3c3a44';
+        for (let k = 0; k < 10; k++) {
+          const ang = a + k * 0.628;
+          ctx.save();
+          ctx.translate(wx + Math.cos(ang) * wr, wy + Math.sin(ang) * wr);
+          ctx.rotate(ang);
+          ctx.fillRect(-1.5, -2, 3, 4);
+          ctx.restore();
+        }
+      }
+      const hr = wr * 0.56;
+      const hub = ctx.createRadialGradient(wx - 1.5, wy - 1.5, 0.5, wx, wy, hr);
       hub.addColorStop(0, '#ffffff');
-      hub.addColorStop(1, '#a9a6b8');
+      hub.addColorStop(1, feral ? '#8a7a6c' : '#a9a6b8');
       ctx.fillStyle = hub;
-      ctx.beginPath(); ctx.arc(wx, -6, 4.5, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(wx, wy, hr, 0, Math.PI * 2); ctx.fill();
       ctx.strokeStyle = '#6d6a7c';
       ctx.lineWidth = 1.2;
-      const a = c.wheel * c.dir;
       ctx.beginPath();
       for (let k = 0; k < 3; k++) {
         const ang = a + k * 2.094;
-        ctx.moveTo(wx, -6); ctx.lineTo(wx + Math.cos(ang) * 4, -6 + Math.sin(ang) * 4);
+        ctx.moveTo(wx, wy); ctx.lineTo(wx + Math.cos(ang) * hr * 0.9, wy + Math.sin(ang) * hr * 0.9);
       }
       ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // A floating, glowing upgrade on the road.
+  function drawPickup(g, cam) {
+    const p = g.pickup;
+    if (!p) return;
+    const sx = p.x - cam;
+    if (sx < -60 || sx > W + 60) return;
+    const y = ROAD_Y - 40 + Math.sin(g.t * 3) * 5;
+    const glow = ctx.createRadialGradient(sx, y, 4, sx, y, 40);
+    glow.addColorStop(0, 'rgba(255,230,120,0.75)');
+    glow.addColorStop(1, 'rgba(255,230,120,0)');
+    ctx.fillStyle = glow;
+    ctx.fillRect(sx - 40, y - 40, 80, 80);
+    ctx.fillStyle = '#fffbe8';
+    ctx.strokeStyle = '#3a2a10';
+    ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(sx, y, 19, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.save();
+    ctx.translate(sx, y);
+    ctx.lineWidth = 2.5;
+    if (p.kind === 'nets') {
+      ctx.strokeStyle = '#2a2830';
+      ctx.strokeRect(-10, -8, 20, 16);
+      ctx.save(); ctx.beginPath(); ctx.rect(-10, -8, 20, 16); ctx.clip();
+      ctx.beginPath();
+      for (let k = -18; k <= 10; k += 6) { ctx.moveTo(k, 8); ctx.lineTo(k + 8, -8); ctx.moveTo(k, -8); ctx.lineTo(k + 8, 8); }
+      ctx.stroke(); ctx.restore();
+    } else if (p.kind === 'roof') {
+      ctx.fillStyle = '#9c9aa8';
+      ctx.fillRect(-12, -6, 24, 12);
+      ctx.strokeStyle = '#3a3842';
+      ctx.strokeRect(-12, -6, 24, 12);
+      ctx.fillStyle = '#3a3842';
+      for (const rx of [-8, 0, 8]) { ctx.fillRect(rx - 1.5, -3, 3, 3); }
+    } else if (p.kind === 'tires') {
+      ctx.fillStyle = '#26242c';
+      ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#c9c6d4';
+      ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
+    } else if (p.kind === 'radar') {
+      ctx.strokeStyle = '#2a8a3a';
+      ctx.beginPath(); ctx.arc(0, 2, 10, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+      ctx.beginPath(); ctx.arc(0, 2, 5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+      ctx.fillStyle = '#2a8a3a';
+      ctx.fillRect(-1.5, 2, 3, 9);
     }
     ctx.restore();
   }
@@ -1501,6 +1716,9 @@
     const g = game;
     text(`FILM ${g.film}/${FILM}`, 6, 6);
     text(`SCORE ${g.score}`, 6, 18, { color: '#ffe680' });
+    const kit = Object.keys(UPGRADES).filter((k) => g.up[k]).map((k) => UPGRADES[k].label).join(' ');
+    if (isFeral()) text('KIT: FERAL', 6, 30, { color: '#ff7a3d' });
+    else if (kit) text(`KIT: ${kit}`, 6, 30, { color: '#9fe0ff' });
     const left = Math.max(0, DAY_LENGTH - g.t);
     const m = Math.floor(left / 60), s = Math.floor(left % 60);
     text(`SUNSET ${m}:${String(s).padStart(2, '0')}`, SW - 6, 6, { align: 'right' });
@@ -1519,6 +1737,20 @@
       ctx.fillRect(34, SH - 13, w, 8);
       ctx.fillStyle = g.car.hp > 30 ? '#b8f0a0' : '#ff9a8a';
       ctx.fillRect(34, SH - 13, w, 2);
+    }
+
+    if (g.up.radar) drawRadar(g);
+
+    // Off-screen pickup marker
+    if (g.pickup) {
+      const zx = screenXOf(g.pickup.x);
+      if (zx < 0 || zx > W) {
+        const isLeft = zx < 0;
+        ctx.fillStyle = SHADOW;
+        tri((isLeft ? 4 : SW - 4) + 1, 151, isLeft);
+        ctx.fillStyle = '#ffe680';
+        tri(isLeft ? 4 : SW - 4, 150, isLeft);
+      }
     }
 
     const T = g.tor;
@@ -1541,8 +1773,40 @@
     }
 
     if (g.msgT > 0) {
-      text(g.msg, SW / 2, 34, { align: 'center', alpha: Math.min(1, g.msgT * 2) });
+      text(g.msg, SW / 2, 46, { align: 'center', alpha: Math.min(1, g.msgT * 2) });
     }
+  }
+
+  // A strip radar: +/- 2.5 miles either side of the car.
+  function drawRadar(g) {
+    const x0 = 128, w = 128, y0 = SH - 16, h = 12, cx = x0 + w / 2;
+    const span = 1700;
+    const toX = (wx) => cx + clamp((wx - g.car.x) / span, -1, 1) * (w / 2 - 2);
+    ctx.fillStyle = SHADOW;
+    ctx.fillRect(x0 - 1, y0 - 1, w + 2, h + 2);
+    ctx.fillStyle = '#0d2a1c';
+    ctx.fillRect(x0, y0, w, h);
+    const T = g.tor;
+    if (T && T.alpha > 0.1) {
+      const [a, b] = coreRange(T);
+      const ca = toX(a), cb = toX(b);
+      ctx.fillStyle = 'rgba(110,160,255,0.55)';
+      ctx.fillRect(Math.round(ca), y0 + 2, Math.max(1, Math.round(cb - ca)), h - 4);
+      if (Math.floor(g.t * 4) % 2 || T.phase !== 'forming') {
+        const tx = Math.round(toX(tornadoGroundX(T)));
+        ctx.fillStyle = '#ff4a3d';
+        ctx.fillRect(tx - 1, y0 + 1, 3 + Math.min(2, T.ef >> 1), h - 2);
+      }
+    }
+    if (g.pickup) {
+      ctx.fillStyle = '#ffe680';
+      ctx.fillRect(Math.round(toX(g.pickup.x)) - 1, y0 + 4, 3, 4);
+    }
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(cx - 1, y0 + 3, 2, h - 6);
+    const sweep = x0 + ((g.t * 60) % w);
+    ctx.fillStyle = 'rgba(125,255,138,0.6)';
+    ctx.fillRect(Math.round(sweep), y0, 1, h);
   }
 
   function tri(x, y, pointLeft) {
