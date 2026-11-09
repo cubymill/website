@@ -78,6 +78,10 @@
       left: calc(54px + env(safe-area-inset-left)); bottom: 96px; width: 56px; height: 56px; font-size: 7px;
       border-color: #9fe0ff;
     }
+    .controls [data-key="center"] {
+      left: calc(14px + env(safe-area-inset-left)); top: 50%; transform: translateY(-50%);
+      width: 40px; height: 40px; font-size: 12px; background: rgba(20, 16, 40, 0.2);
+    }
     .controls [data-key="pause"] {
       right: calc(14px + env(safe-area-inset-right)); top: 50%; transform: translateY(-50%);
       width: 40px; height: 40px; font-size: 10px; background: rgba(20, 16, 40, 0.2);
@@ -87,7 +91,8 @@
   @media (pointer: coarse) {
     body:not([data-state="play"]) .controls button { display: none; }
     body[data-state="paused"] .controls [data-key="pause"] { display: flex; }
-    body:not([data-mode="drive"]) .controls [data-key="brake"] { display: none; }
+    body:not([data-mode="drive"]) .controls [data-key="brake"],
+    body:not([data-mode="drive"]) .controls [data-key="center"] { display: none; }
   }
   @media (pointer: coarse) and (orientation: portrait) {
     #rotate { display: flex; }
@@ -119,9 +124,10 @@
           <button data-key="zoom">ZOOM</button>
           <button data-key="shutter">SNAP</button>
           <button data-key="pause">II</button>
+          <button data-key="center" aria-label="Look ahead">&#9650;</button>
         </div>
-        <p class="howto keys">&larr; &rarr; / A D drive or steer &nbsp;·&nbsp; &uarr; &darr; speed up, brake (windshield view) &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
-        <p class="howto">Get close, or zoom in, for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase. Sound on.</p>
+        <p class="howto keys">&larr; &rarr; / A D drive or steer &nbsp;·&nbsp; &uarr; &darr; speed up, brake (windshield view) &nbsp;·&nbsp; Q E or drag to look around, C to face forward (windshield view) &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
+        <p class="howto">Get close, or zoom in and wait for the focus to lock, for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase. Sound on.</p>
 
       </div>
 

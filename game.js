@@ -377,6 +377,8 @@
       tone(midi(38), now(), { wave: 'triangle', attack: 1, decay: 4, gain: 0.15 });
     },
     swept() { [0, 0.25, 0.5].forEach((d, i) => tone(180 + i * 60, now() + d, { decay: 0.6, gain: 0.07, glide: 4 })); },
+    focus() { tone(midi(100), now(), { decay: 0.04, gain: 0.04 }); tone(midi(105), now() + 0.07, { decay: 0.05, gain: 0.04 }); },
+    advance() { [0.14, 0.2, 0.26, 0.32].forEach((d) => noise(0.02, { freq: 2600, q: 3, gain: 0.12, at: now() + d })); },
     powerup() { [72, 76, 79, 84].forEach((n, i) => tone(midi(n), now() + i * 0.06, { decay: 0.1, gain: 0.07 })); },
     feral() {
       noise(0.6, { freq: 160, q: 1, gain: 0.4, type: 'lowpass', decay: 0.6 });
@@ -386,11 +388,12 @@
   };
 
   // ---------------------------------------------------------------- input
-  const keys = { left: false, right: false, zoom: false, gas: false, brake: false };
+  const keys = { left: false, right: false, zoom: false, gas: false, brake: false, lookLeft: false, lookRight: false };
   const KEYMAP = {
     ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
     KeyZ: 'zoom', ShiftLeft: 'zoom', ShiftRight: 'zoom',
     ArrowUp: 'gas', KeyW: 'gas', ArrowDown: 'brake', KeyS: 'brake',
+    KeyQ: 'lookLeft', KeyE: 'lookRight',
   };
 
   window.addEventListener('keydown', (e) => {
@@ -405,6 +408,8 @@
       if (!e.repeat) action();
     } else if (e.code === 'KeyP' || e.code === 'Escape') {
       togglePause();
+    } else if (e.code === 'KeyC') {
+      if (game) game.recenter = true;
     } else if (e.code === 'KeyM') {
       setMuted(!muted);
       flashMsg(muted ? 'Sound off' : 'Sound on');
@@ -415,9 +420,38 @@
   });
 
   // Tapping the canvas starts the game or takes a photo.
+  // In the windshield view, dragging the picture swivels the camera; a tap
+  // without dragging still takes a photo.
+  let drag = null;
+  const canLook = () => game && game.mode === 'drive' && (state === 'play' || state === 'sunset');
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 8) drag.moved = true;
+    if (drag.moved && canLook()) {
+      const wpx = canvas.getBoundingClientRect().width || 1;
+      game.yaw = wrapAngle(drag.yaw0 - (dx / wpx) * Math.PI * 1.3);
+      game.recenter = false;
+    }
+  });
+  const endDrag = (e, fire) => {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag;
+    drag = null;
+    if (fire && !d.moved) action();
+  };
+  canvas.addEventListener('pointerup', (e) => endDrag(e, true));
+  canvas.addEventListener('pointercancel', (e) => endDrag(e, false));
+
   canvas.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     canvas.focus();
+    if (canLook()) {
+      initAudio();
+      drag = { id: e.pointerId, x: e.clientX, yaw0: game.yaw, moved: false };
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+      return;
+    }
     if (state === 'title') {
       // Tapping a half of the title screen picks that view.
       const r = canvas.getBoundingClientRect();
@@ -434,12 +468,13 @@
       btn.classList.add('active');
       if (k === 'shutter') action();
       else if (k === 'pause') { initAudio(); togglePause(); }
+      else if (k === 'center') { if (game) game.recenter = true; }
       else keys[k] = true;
     };
     const up = (e) => {
       e.preventDefault();
       btn.classList.remove('active');
-      if (k !== 'shutter' && k !== 'pause') keys[k] = false;
+      if (k !== 'shutter' && k !== 'pause' && k !== 'center') keys[k] = false;
     };
     btn.addEventListener('pointerdown', down);
     btn.addEventListener('pointerup', up);
@@ -498,7 +533,8 @@
 
   function newGame(mode = 'side') {
     return {
-      mode, lane: 0, dist: 0, speed: 0, steerVis: 0, bgCam: 0,
+      mode, lane: 0, dist: 0, speed: 0, steerVis: 0, bgCam: 0, yaw: 0, yawRate: 0, recenter: false,
+      focus: 1, blackout: 0,
       fpHail: [], fpDebris: [], splats: [], rain: 0, torScreen: null, picnic: null,
       t: 0, score: 0, film: FILM, frames: 0,
       car: { x: 0, vx: 0, hp: 100, dir: 1, hurt: 0, wheel: 0 },
@@ -521,6 +557,7 @@
     setSong(round - 1);
     setMusicMode('ambient');
     flashMsg('Storms are firing. Go find a tornado.');
+    if (selMode === 'drive') setTimeout(() => { if (state === 'play' && game.t < 8) flashMsg(TOUCH ? 'Drag the view to look around.' : 'Q / E or drag to look around.', 3); }, 2600);
   }
 
   // The title screen shows a little demo of whichever view is selected.
@@ -830,6 +867,7 @@
     d.shown = Math.min(pageLength(d), d.shown + dt * 48);
     if (Math.floor(d.shown) !== before && Math.floor(d.shown) % 3 === 0) sfx.blip();
     game.flash = Math.max(0, game.flash - dt * 4);
+    game.blackout = Math.max(0, game.blackout - dt);
   }
   function advanceDialog() {
     const d = game.dialog;
@@ -1147,13 +1185,15 @@
     if (game.shutterCd > 0 || game.film <= 0 || game.ending > 0) return;
     game.shutterCd = 0.4;
     game.film--;
-    game.flash = 1;
+    // Through the viewfinder the mirror blacks it out; otherwise a flash.
+    if (game.zoom > 1.02) game.blackout = 0.14; else game.flash = 1;
     sfx.shutter();
+    sfx.advance();
 
     const T = game.tor;
     const z = game.zoom;
     let points = 0, short = 'Empty sky.', tag = 'empty';
-    const ahead = !T || game.mode !== 'drive' || T.z > game.dist + NEAR;
+    const ahead = !T || game.mode !== 'drive' || !!game.torScreen;
     if (T && T.alpha > 0.25 && ahead) {
       const zx = tornadoZX(T);
       const phaseName = { forming: 'funnel', mature: 'tornado', roping: 'rope-out' }[T.phase];
@@ -1169,6 +1209,10 @@
         const reach = tornadoReach(T);
         points = Math.round(100 * closeness * framing * (1 + T.ef * 0.4) * phaseMult * T.alpha * (0.4 + 0.6 * reach));
         short = `EF${T.ef} ${phaseName}`;
+        if (z > 1.05) {
+          points = Math.round(points * (0.55 + 0.45 * game.focus));
+          if (game.focus < 0.6) short += ' (soft)';
+        }
         if (game.lightning > 0) { points += 40; short += ' + bolt'; }
         if (points < 15) short = 'Too far.';
         tag = game.lightning > 0 ? 'lightning'
@@ -1180,7 +1224,7 @@
           : dEff > 0.675 ? 'far' : 'any';
       }
     } else if (T && T.alpha > 0.25) {
-      short = 'Missed it. It\'s behind you.';
+      short = 'Missed it. Not in view.';
       tag = 'miss';
     }
     game.score += points;
@@ -1203,6 +1247,7 @@
     // Viewfinder zoom eases in while held and back out on release.
     const zt = state === 'play' && keys.zoom ? MAX_ZOOM : 1;
     g.zoom += clamp(zt - g.zoom, -dt * 4, dt * 2.2);
+    g.blackout = Math.max(0, g.blackout - dt);
     // While zoomed, the photographer pans after the tornado, a little behind it.
     let aimTarget = W / 2;
     if (g.tor && keys.zoom) {
@@ -1210,6 +1255,7 @@
       if (sx > -60 && sx < W + 60) aimTarget = clamp(sx, 120, W - 120);
     }
     g.aimX += (aimTarget - g.aimX) * Math.min(1, dt * 2.5);
+    updateFocus(g, dt);
     if (state === 'play') updatePickups(dt);
     if (state === 'play' && g.dialogDelay > 0) {
       g.dialogDelay -= dt;
@@ -1468,6 +1514,8 @@
       ctx.fillRect(0, 0, SW, SH);
     }
 
+    // Through the viewfinder you only see its own readouts.
+    if (g.zoom > 1.3 && state === 'play') { drawViewfinder(g); return; }
     if (g.zoom > 1.02 && (state === 'play' || state === 'paused')) drawViewfinder(g);
     if (state === 'play' || state === 'paused' || state === 'dialog') drawHUD();
     if (state === 'dialog' && g.dialog) drawDialog(g.dialog);
@@ -1502,7 +1550,9 @@
     ctx.fillRect(-20, -20, W + 40, HORIZON + 40);
 
     // A low sun shining under the storm, setting through the day.
-    const sx = W * 0.82, sy = lerp(178, HORIZON + 6, clamp(g.t / DAY_LENGTH, 0, 1));
+    // The sun sits a little right of the road; in the windshield view it moves as you look around.
+    const sx = g.mode === 'drive' ? W / 2 + wrapAngle(0.55 - g.yaw) * PANO : W * 0.82;
+    const sy = lerp(178, HORIZON + 6, clamp(g.t / DAY_LENGTH, 0, 1));
     const glow = ctx.createRadialGradient(sx, sy, 10, sx, sy, 150);
     glow.addColorStop(0, col('sun', 0.7));
     glow.addColorStop(1, col('sun', 0));
@@ -1529,7 +1579,7 @@
       ctx.fillStyle = g;
       ctx.beginPath();
       ctx.moveTo(-20, HORIZON + 4);
-      for (let sx = -20; sx <= W + 20; sx += 10) ctx.lineTo(sx, hillY(sx + cam * par, near));
+      for (let sx = -20; sx <= W + 20; sx += 10) ctx.lineTo(sx, hillY(sx + cam * par + yawPx, near));
       ctx.lineTo(W + 20, HORIZON + 4);
       ctx.closePath();
       ctx.fill();
@@ -1537,12 +1587,12 @@
 
     // Lollipop trees and the odd barn on the near hills.
     const par = 0.25, step = 70;
-    const first = Math.floor((cam * par - 60) / step);
+    const first = Math.floor((cam * par + yawPx - 60) / step);
     for (let i = first; i < first + W / step + 3; i++) {
       const h = hash(i);
       if (h < 0.5) continue;
       const wx = i * step + hash(i + 3) * 40;
-      const sx = wx - cam * par;
+      const sx = wx - cam * par - yawPx;
       const by = hillY(wx, true) + 4;
       if (hash(i * 1.7) > 0.93) { drawBarn(sx, by); continue; }
       const r = 7 + hash(i + 9) * 6;
@@ -1747,9 +1797,9 @@
 
     // Angular light facets in the upper storm
     const fpar = 0.2, fstep = 150;
-    let first = Math.floor((cam * fpar - 200) / fstep);
+    let first = Math.floor((cam * fpar + yawPx - 200) / fstep);
     for (let i = first; i < first + W / fstep + 4; i++) {
-      const sx = i * fstep - cam * fpar + hash(i + 11) * 60;
+      const sx = i * fstep - cam * fpar - yawPx + hash(i + 11) * 60;
       const h = hash(i + 21);
       ctx.fillStyle = col('cloudLight', 0.12 + h * 0.16);
       ctx.beginPath();
@@ -1769,7 +1819,7 @@
       { par: 0.3, y: CLOUD_BASE - 80, depth: 34, seed: 3, fill: col('cloudShade'), rim: col('cloudLight', 0.25) },
     ];
     for (const t of tiers) {
-      const off = cam * t.par;
+      const off = cam * t.par + yawPx;
       ctx.beginPath();
       ctx.moveTo(-W, -H);
       const edge = [];
@@ -2585,25 +2635,6 @@
     ctx.fill();
   }
 
-  function drawViewfinder(g) {
-    const a = clamp((g.zoom - 1) * 2, 0, 1);
-    ctx.globalAlpha = a;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, 0, SW, 12);
-    ctx.fillRect(0, SH - 12, SW, 12);
-    ctx.fillStyle = '#ffffff';
-    const i = 22, L = 14;
-    for (const [x, y, sx, sy] of [[i, i, 1, 1], [SW - i, i, -1, 1], [i, SH - i, 1, -1], [SW - i, SH - i, -1, -1]]) {
-      ctx.fillRect(sx > 0 ? x : x - L, y - (sy > 0 ? 0 : 1), L, 1);
-      ctx.fillRect(x - (sx > 0 ? 0 : 1), sy > 0 ? y : y - L, 1, L);
-    }
-    const cy = Math.round(ZOOM_Y * PX);
-    ctx.fillRect(SW / 2 - 6, cy, 4, 1); ctx.fillRect(SW / 2 + 3, cy, 4, 1);
-    ctx.fillRect(SW / 2, cy - 6, 1, 4); ctx.fillRect(SW / 2, cy + 3, 1, 4);
-    ctx.globalAlpha = 1;
-    text(`ZOOM ${g.zoom.toFixed(1)}X`, SW / 2, SH - 34, { align: 'center', alpha: a, color: '#ffe680' });
-  }
-
   function drawPanel(x, y, w, h) {
     ctx.fillStyle = SHADOW;
     ctx.fillRect(x - 1, y - 1, w + 2, h + 2);
@@ -2682,12 +2713,13 @@
   // World units: x across the road (0 = centre line), z down the road.
   const SEG = 200;            // length of one road segment
   const DRAW = 220;           // segments drawn ahead
+  const BACK = 90;            // segments drawn behind (for looking back)
   const ROAD_W = 1500;        // half-width of the road
   const CAM_DEPTH = 0.84;     // ~100 degree field of view
   const NEAR = 260;
   const MI_PER_U = 1 / 25000;
   const DASH_Y = 446;         // top of the dashboard
-  const drive = { base: 0, segX: new Float32Array(DRAW + 2), camH: 1000 };
+  const drive = { base: 0, segX: new Float32Array(DRAW + BACK + 3), camH: 1000 };
 
   function curveAt(i) {
     return 3.2 * Math.sin(i * 0.0061) * Math.sin(i * 0.0023 + 1.3) + 1.1 * Math.sin(i * 0.017 + 2);
@@ -2767,12 +2799,24 @@
     g.bgCam += curve * pct * dt * 420;
     c.hurt = Math.max(0, c.hurt - dt);
 
+    // Looking around the cabin: Q/E, dragging the view, or C to face forward.
+    const prevYaw = g.yaw;
+    const look = (keys.lookRight ? 1 : 0) - (keys.lookLeft ? 1 : 0);
+    if ((playing || state === 'sunset') && look) { g.yaw = wrapAngle(g.yaw + look * 2.4 * dt); g.recenter = false; }
+    if (g.recenter || state === 'title') {
+      g.yaw *= 1 - Math.min(1, dt * 6);
+      if (Math.abs(g.yaw) < 0.005) { g.yaw = 0; g.recenter = false; }
+    }
+    g.yawRate = wrapAngle(g.yaw - prevYaw) / Math.max(dt, 1e-3);
+
     // Viewfinder zoom pans toward the tornado on screen.
     const zt = playing && keys.zoom ? MAX_ZOOM : 1;
     g.zoom += clamp(zt - g.zoom, -dt * 4, dt * 2.2);
     let aimTarget = W / 2;
     if (g.tor && keys.zoom && g.torScreen && g.torScreen.x > -60 && g.torScreen.x < W + 60) aimTarget = clamp(g.torScreen.x, 120, W - 120);
     g.aimX += (aimTarget - g.aimX) * Math.min(1, dt * 2.5);
+    updateFocus(g, dt);
+    g.blackout = Math.max(0, g.blackout - dt);
     if (playing && g.dialogDelay > 0) {
       g.dialogDelay -= dt;
       if (g.dialogDelay <= 0) openDialog(g.dialogQuote);
@@ -2782,10 +2826,10 @@
     // Tornado
     updateTornado(dt);
     let T = g.tor;
-    if (T && T.z < g.dist - 300 && !T.finale) {
+    if (T && T.z < g.dist - 7000 && !T.finale) {
       g.tor = null; T = null;
       g.nextTor = rand(2, 4);
-      if (playing) flashMsg('It\'s behind you now.');
+      if (playing) flashMsg('Lost it behind you.');
     }
 
     // Rain and hail in the core
@@ -2901,16 +2945,57 @@
   }
 
   // ---------------------------------------------------------------- windshield drawing
+  // ---- Camera with a swivel. yaw 0 looks down the road, +pi/2 out the
+  // passenger window, pi out the back. Points are relative to the driver:
+  // rx across, ry down from eye height, rz along the road.
+  const NEAR_CAM = 80;
+  const PANO = 550;           // screen px per radian for the interior and backdrop
+  let camCos = 1, camSin = 0;
+  let yawPx = 0;              // backdrop shift for the current view direction
+  const wrapAngle = (a) => ((((a + Math.PI) % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2)) - Math.PI;
+  const segOff = (n) => drive.segX[clamp(n, -BACK, DRAW + 1) + BACK];
+
+  function toCam(rx, rz) { return [rx * camCos - rz * camSin, rx * camSin + rz * camCos]; }
+
+  // Fill a ground polygon given in driver-relative coordinates, clipped to
+  // the near plane so pieces beside and behind the car draw correctly.
+  function fillWorldPoly(pts, color) {
+    const cam = pts.map(([rx, ry, rz]) => { const [cx, cz] = toCam(rx, rz); return [cx, ry, cz]; });
+    let anyIn = false;
+    for (const p of cam) if (p[2] >= NEAR_CAM) { anyIn = true; break; }
+    if (!anyIn) return;
+    const out = [];
+    for (let i = 0; i < cam.length; i++) {
+      const a = cam[i], b = cam[(i + 1) % cam.length];
+      const ain = a[2] >= NEAR_CAM, bin = b[2] >= NEAR_CAM;
+      if (ain) out.push(a);
+      if (ain !== bin) {
+        const t = (NEAR_CAM - a[2]) / (b[2] - a[2]);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, NEAR_CAM]);
+      }
+    }
+    if (out.length < 3) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    out.forEach((p, i) => {
+      const s = CAM_DEPTH / p[2];
+      const X = W / 2 + p[0] * s * 480, Y = HORIZON + p[1] * s * 270;
+      if (i) ctx.lineTo(X, Y); else ctx.moveTo(X, Y);
+    });
+    ctx.closePath();
+    ctx.fill();
+  }
+
   // Project a world point using this frame's road; k is pixels per world unit.
   function spriteAt(wx, wy, wz) {
     const g = game;
-    const zc = wz - g.dist;
-    if (zc < NEAR) return null;
     const n = (wz - drive.base * SEG) / SEG;
-    const i0 = clamp(Math.floor(n), 0, DRAW), f = clamp(n - i0, 0, 1);
-    const off = lerp(drive.segX[i0], drive.segX[Math.min(DRAW + 1, i0 + 1)], f);
-    const s = CAM_DEPTH / zc;
-    return { x: W / 2 + s * (wx + off - g.lane) * 480, y: HORIZON + s * (drive.camH - wy) * 270, k: s * 480 };
+    const i0 = Math.floor(n), f = n - i0;
+    const off = lerp(segOff(i0), segOff(i0 + 1), clamp(f, 0, 1));
+    const [cx, cz] = toCam(wx + off - g.lane, wz - g.dist);
+    if (cz < NEAR_CAM * 3) return null;
+    const s = CAM_DEPTH / cz;
+    return { x: W / 2 + cx * s * 480, y: HORIZON + (drive.camH - wy) * s * 270, k: s * 480, cz };
   }
 
   function palArr(name) { return mix(PAL[name][0], PAL[name][1], dusk); }
@@ -2920,62 +3005,54 @@
     drive.base = base;
     const pct = (g.dist % SEG) / SEG;
     const camH = drive.camH;
+    // Road centre offsets ahead of and behind the car.
     let x = 0, dx = -curveAt(base) * pct;
-    let maxy = H + 40;
+    for (let n = 0; n <= DRAW + 1; n++) { drive.segX[n + BACK] = x; x += dx; dx += curveAt(base + n); }
+    x = 0; dx = -curveAt(base) * pct;
+    for (let n = -1; n >= -BACK; n--) { dx -= curveAt(base + n); x -= dx; drive.segX[n + BACK] = x; }
+
     const haze = palArr('skyLow');
     const cols = {
       f1: palArr('fieldTop'), f2: palArr('fieldLow'), v1: palArr('verge'), v2: palArr('vergeDark'),
-      r1: palArr('road'), r2: mix(palArr('road'), [0, 0, 0], 0.08), line: [255, 244, 196],
+      r1: palArr('road'), r2: mix(palArr('road'), [0, 0, 0], 0.08), line: [255, 244, 196], dash: [255, 214, 90],
     };
-    const proj = (z, xoff) => {
-      const s = CAM_DEPTH / (z - g.dist);
-      return { x: W / 2 + s * (xoff - g.lane) * 480, y: HORIZON + s * camH * 270, w: s * ROAD_W * 480 };
-    };
-    for (let n = 0; n <= DRAW; n++) {
-      const i = base + n, z1 = i * SEG, z2 = z1 + SEG;
-      drive.segX[n] = x;
-      const nx = x + dx;
-      if (z1 - g.dist > NEAR) {
-        const p1 = proj(z1, x), p2 = proj(z2, nx);
-        if (p2.y < maxy) {
-          const fog = Math.pow(n / DRAW, 1.4) * 0.85;
-          const c = (arr) => rgb(mix(arr, haze, fog));
-          const alt = Math.floor(i / 3) % 2;
-          const yTop = Math.max(p2.y, HORIZON), yBot = Math.min(p1.y, maxy);
-          ctx.fillStyle = c(alt ? cols.f1 : cols.f2);
-          ctx.fillRect(-W, yTop, W * 3, yBot - yTop + 1);
-          const quad = (x1, w1, x2, w2, color) => {
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.moveTo(x1 - w1, p1.y); ctx.lineTo(x2 - w2, p2.y); ctx.lineTo(x2 + w2, p2.y); ctx.lineTo(x1 + w1, p1.y);
-            ctx.closePath(); ctx.fill();
-          };
-          quad(p1.x, p1.w * 1.3, p2.x, p2.w * 1.3, c(alt ? cols.v1 : cols.v2));
-          quad(p1.x, p1.w, p2.x, p2.w, c(alt ? cols.r1 : cols.r2));
-          if (p1.w > 6) {
-            const lw1 = p1.w * 0.03, lw2 = p2.w * 0.03;
-            quad(p1.x - p1.w * 0.92, lw1, p2.x - p2.w * 0.92, lw2, c(cols.line));
-            quad(p1.x + p1.w * 0.92, lw1, p2.x + p2.w * 0.92, lw2, c(cols.line));
-            if (Math.floor(i / 4) % 2 === 0) quad(p1.x, lw1 * 0.9, p2.x, lw2 * 0.9, c([255, 214, 90]));
-          }
-          maxy = p2.y;
-        }
+    ctx.fillStyle = rgb(mix(cols.f2, haze, 0.5));
+    ctx.fillRect(-W, HORIZON, W * 3, H * 2);
+
+    // Far to near, ahead and behind interleaved.
+    const order = [];
+    for (let n = -BACK; n < DRAW; n++) order.push(n);
+    order.sort((a, b) => Math.abs(b + 0.5) - Math.abs(a + 0.5));
+    const L = g.lane;
+    for (const n of order) {
+      const i = base + n;
+      const rz1 = i * SEG - g.dist, rz2 = rz1 + SEG;
+      const o1 = segOff(n) - L, o2 = segOff(n + 1) - L;
+      const fog = Math.pow(Math.min(1, Math.abs(n) / DRAW), 1.4) * 0.85;
+      const c = (arr) => rgb(mix(arr, haze, fog));
+      const alt = Math.floor(i / 3) % 2;
+      const quad = (a1, w1, a2, w2, color) => fillWorldPoly([[o1 + a1 - w1, camH, rz1], [o2 + a2 - w2, camH, rz2], [o2 + a2 + w2, camH, rz2], [o1 + a1 + w1, camH, rz1]], color);
+      quad(0, 40000, 0, 40000, c(alt ? cols.f1 : cols.f2));
+      quad(0, ROAD_W * 1.3, 0, ROAD_W * 1.3, c(alt ? cols.v1 : cols.v2));
+      quad(0, ROAD_W, 0, ROAD_W, c(alt ? cols.r1 : cols.r2));
+      if (Math.abs(n) < 90) {
+        const lw = ROAD_W * 0.03;
+        quad(-ROAD_W * 0.92, lw, -ROAD_W * 0.92, lw, c(cols.line));
+        quad(ROAD_W * 0.92, lw, ROAD_W * 0.92, lw, c(cols.line));
+        if (Math.floor(i / 4) % 2 === 0) quad(0, lw * 0.9, 0, lw * 0.9, c(cols.dash));
       }
-      x = nx;
-      dx += curveAt(i);
     }
-    drive.segX[DRAW + 1] = x;
   }
 
   // Roadside furniture, cattle, storms and debris, sorted far to near.
   function collectSprites(g) {
     const list = [];
     const base = drive.base;
-    for (let n = DRAW - 3; n >= 1; n--) {
-      const i = base + n, z = i * SEG;
-      if (n < 120 && i % 2 === 0) { list.push({ z, kind: 'post', x: -ROAD_W * 1.32, side: -1 }); list.push({ z, kind: 'post', x: ROAD_W * 1.32, side: 1 }); }
+    for (let n = DRAW - 3; n >= -BACK + 1; n--) {
+      const i = base + n, z = i * SEG, an = Math.abs(n);
+      if (an < 120 && i % 2 === 0) { list.push({ z, kind: 'post', x: -ROAD_W * 1.32 }); list.push({ z, kind: 'post', x: ROAD_W * 1.32 }); }
       if (i % 12 === 0) list.push({ z, kind: 'pole', x: ROAD_W * 2.3 });
-      if (n < 170 && hash(i * 3.3) > 0.955) {
+      if (an < 170 && hash(i * 3.3) > 0.955) {
         const side = hash(i * 1.1) > 0.5 ? 1 : -1;
         const x0 = side * (ROAD_W * 1.9 + hash(i * 2.7) * 7000);
         const count = 1 + Math.floor(hash(i * 4.4) * 3);
@@ -2983,48 +3060,47 @@
       }
       if (hash(i * 5.1) > 0.94) list.push({ z, kind: 'tree', x: (hash(i * 5.7) > 0.5 ? 1 : -1) * (ROAD_W * 2.6 + hash(i * 6.6) * 16000), r: 60 + hash(i * 6.1) * 60 });
       if (hash(i * 7.7) > 0.992) list.push({ z, kind: 'barn', x: (hash(i * 8.1) > 0.5 ? 1 : -1) * (6000 + hash(i * 8.8) * 14000) });
-      if (n < 45) for (const sd of [-1, 1]) list.push({ z: z + hash(i + sd) * SEG, kind: 'tuft', x: sd * (ROAD_W * 1.45 + hash(i * 9.1 + sd) * 3000) });
+      if (an < 45) for (const sd of [-1, 1]) list.push({ z: z + hash(i + sd) * SEG, kind: 'tuft', x: sd * (ROAD_W * 1.45 + hash(i * 9.1 + sd) * 3000) });
     }
-    if (g.tor) list.push({ z: g.tor.z, kind: 'tornado' });
+    if (g.tor) list.push({ z: g.tor.z, kind: 'tornado', x: tornadoGroundX(g.tor) });
     if (g.pickup) list.push({ z: g.pickup.z, kind: 'pickup', x: g.pickup.x });
-    for (const p of g.fpDebris) list.push({ z: p.z, kind: 'debris', p });
-    if (state === 'sunset' && g.picnic) list.push({ z: g.picnic.z, kind: 'picnic' });
-    list.sort((a, b) => b.z - a.z);
-    return list;
+    for (const p of g.fpDebris) list.push({ z: p.z, kind: 'debris', x: p.x, y: p.y, p });
+    if (state === 'sunset' && g.picnic) list.push({ z: g.picnic.z, kind: 'picnic', x: g.picnic.x });
+    const shown = [];
+    for (const sp of list) {
+      sp.at = spriteAt(sp.x, sp.y || 0, sp.z);
+      if (sp.at && sp.at.x > -500 && sp.at.x < W + 500) shown.push(sp);
+    }
+    shown.sort((a, b) => b.at.cz - a.at.cz);
+    return shown;
   }
 
   function drawSprites(g) {
-    const last = { '-1': null, 1: null };
-    let lastPole = null;
     g.torScreen = null;
     for (const sp of collectSprites(g)) {
-      if (sp.kind === 'tornado') { drawTornadoFP(g, g.tor); continue; }
-      if (sp.kind === 'debris') {
-        const q = spriteAt(sp.p.x, sp.p.y, sp.p.z);
-        if (!q || q.y > DASH_Y + 60) continue;
-        ctx.save(); ctx.translate(q.x, q.y); const k = clamp(q.k * 22, 0.08, 8); ctx.scale(k, k);
-        drawDebrisPiece(sp.p, g.t); ctx.restore();
-        continue;
-      }
-      if (sp.kind === 'picnic') { drawPicnicFP(g); continue; }
-      const p = spriteAt(sp.x, 0, sp.z);
-      if (!p) continue;
-      if (p.x < -400 || p.x > W + 400) { if (sp.kind === 'post') last[sp.side] = null; continue; }
-      const k = p.k;
+      const p = sp.at, k = p.k;
       switch (sp.kind) {
+        case 'tornado': drawTornadoFP(g, g.tor, p); break;
+        case 'picnic': drawPicnicFP(g, p); break;
+        case 'debris': {
+          if (p.y > DASH_Y + 60) break;
+          ctx.save(); ctx.translate(p.x, p.y); const s = clamp(k * 22, 0.08, 8); ctx.scale(s, s);
+          drawDebrisPiece(sp.p, g.t); ctx.restore();
+          break;
+        }
         case 'post': {
           const h = 260 * k, w = Math.max(1.5, 22 * k);
           ctx.fillStyle = col('pole');
           ctx.fillRect(p.x - w / 2, p.y - h, w, h);
-          const prev = last[sp.side];
-          if (prev) {
+          const q = spriteAt(sp.x, 0, sp.z + SEG * 2);
+          if (q) {
+            const qh = 260 * q.k;
             ctx.strokeStyle = 'rgba(70,66,78,0.9)';
             ctx.lineWidth = Math.max(1, 4 * k);
             ctx.beginPath();
-            for (const f of [0.35, 0.65, 0.92]) { ctx.moveTo(prev.x, prev.y - prev.h * f); ctx.lineTo(p.x, p.y - h * f); }
+            for (const f of [0.35, 0.65, 0.92]) { ctx.moveTo(q.x, q.y - qh * f); ctx.lineTo(p.x, p.y - h * f); }
             ctx.stroke();
           }
-          last[sp.side] = { x: p.x, y: p.y, h };
           break;
         }
         case 'pole': {
@@ -3032,27 +3108,27 @@
           ctx.fillStyle = col('pole');
           ctx.fillRect(p.x - w / 2, p.y - h, w, h);
           ctx.fillRect(p.x - 160 * k, p.y - h * 0.94, 320 * k, Math.max(1.5, 30 * k));
-          if (lastPole) {
+          const q = spriteAt(sp.x, 0, sp.z + SEG * 12);
+          if (q) {
+            const qh = 1500 * q.k;
             ctx.strokeStyle = 'rgba(60,46,60,0.75)';
             ctx.lineWidth = 2.5;
             ctx.beginPath();
             for (const o of [-130, 130]) {
-              ctx.moveTo(lastPole.x + o * lastPole.k, lastPole.y - lastPole.h * 0.94);
-              ctx.quadraticCurveTo((lastPole.x + p.x) / 2, (lastPole.y - lastPole.h * 0.94 + p.y - h * 0.94) / 2 + 30 * k, p.x + o * k, p.y - h * 0.94);
+              ctx.moveTo(q.x + o * q.k, q.y - qh * 0.94);
+              ctx.quadraticCurveTo((q.x + p.x) / 2, (q.y - qh * 0.94 + p.y - h * 0.94) / 2 + 30 * k, p.x + o * k, p.y - h * 0.94);
             }
             ctx.stroke();
           }
-          lastPole = { x: p.x, y: p.y, h, k };
           break;
         }
         case 'cow':
           drawGrazingCow(p.x, p.y, k * 9, sp.face, g.t + hash(sp.id) * 50);
           break;
         case 'tree': {
-          const r = sp.r * k;
           ctx.fillStyle = col('pole');
           ctx.fillRect(p.x - 12 * k, p.y - (sp.r * 1.6) * k, 24 * k, sp.r * 1.6 * k);
-          puff(p.x, p.y - sp.r * 2.1 * k, r, col('treeLight'), col('tree'), col('hillShade'));
+          puff(p.x, p.y - sp.r * 2.1 * k, sp.r * k, col('treeLight'), col('tree'), col('hillShade'));
           break;
         }
         case 'barn':
@@ -3076,10 +3152,7 @@
     }
   }
 
-  function drawTornadoFP(g, T) {
-    const gx = tornadoGroundX(T);
-    const p = spriteAt(gx, 0, T.z);
-    if (!p) return;
+  function drawTornadoFP(g, T, p) {
     g.torScreen = { x: p.x, y: p.y, k: p.k };
     const hs = clamp(p.k * 6, 0.05, 3.4);
     const top = CLOUD_BASE - 20;
@@ -3103,9 +3176,7 @@
     ctx.restore();
   }
 
-  function drawPicnicFP(g) {
-    const p = spriteAt(g.picnic.x, 0, g.picnic.z);
-    if (!p) return;
+  function drawPicnicFP(g, p) {
     const k = p.k * 15; // drawn a little larger than life so the toast reads
     ctx.save();
     ctx.translate(p.x, p.y);
@@ -3131,6 +3202,11 @@
       ctx.stroke();
     }
     for (const h of g.fpHail) puff(h.x, h.y, 4, '#ffffff', '#eef3ff', '#a9b8de');
+
+  }
+
+  // Hail splats and cracks on the windshield.
+  function drawSplats(g) {
     for (const sp of g.splats) {
       const a = clamp(sp.life, 0, 1);
       if (sp.crack) {
@@ -3153,8 +3229,9 @@
     }
   }
 
-  // The inside of the Vibe: hood, pillars, mirror, dash, wheel and gauges.
-  function drawCockpit(g) {
+  // The front of the Vibe's interior: hood, windshield pillars, mirror,
+  // dash, wheel and gauges.
+  function drawFrontPanel(g) {
     const up = g.up, feral = isFeral(), t = g.t;
     const bounce = Math.sin(t * 13) * Math.min(1.5, g.speed / 4000) * (up.tires ? 1.6 : 1);
     ctx.save();
@@ -3198,6 +3275,8 @@
       }
     }
 
+    drawSplats(g);
+
     // Wipers in the rain
     if (g.rain > 0.25) {
       const sweep = 0.5 - 0.5 * Math.cos(t * 3.4);
@@ -3210,24 +3289,10 @@
       }
     }
 
-    // Window netting
-    if (up.nets) {
-      ctx.save();
-      ctx.beginPath(); ctx.moveTo(70, 22); ctx.lineTo(W - 70, 22); ctx.lineTo(W - 18, DASH_Y); ctx.lineTo(18, DASH_Y); ctx.closePath(); ctx.clip();
-      ctx.strokeStyle = 'rgba(28,26,34,0.22)'; ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      for (let k = -H; k < W + H; k += 64) { ctx.moveTo(k, 0); ctx.lineTo(k + H, H); ctx.moveTo(k, H); ctx.lineTo(k + H, 0); }
-      ctx.stroke();
-      ctx.restore();
-    }
-
     // Roof, pillars and the cage outside once feral
     ctx.fillStyle = '#2a2632';
-    ctx.fillRect(-20, -20, W + 40, 42);
     ctx.beginPath(); ctx.moveTo(-20, -20); ctx.lineTo(82, 22); ctx.lineTo(24, DASH_Y + 10); ctx.lineTo(-20, DASH_Y + 10); ctx.closePath(); ctx.fill();
     ctx.beginPath(); ctx.moveTo(W + 20, -20); ctx.lineTo(W - 82, 22); ctx.lineTo(W - 24, DASH_Y + 10); ctx.lineTo(W + 20, DASH_Y + 10); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.08)';
-    ctx.fillRect(-20, 16, W + 40, 6);
     if (feral) {
       ctx.fillStyle = '#3a3842'; ctx.fillRect(70, 22, W - 140, 10);
       for (const lx of [150, W - 150]) {
@@ -3344,18 +3409,130 @@
 
     ctx.restore();
 
+  }
+
+  // ---- The car's interior, wrapped all the way around the driver. Each
+  // panel is drawn in front-view coordinates (centre x = W/2) and slid
+  // sideways by how far it sits from where you're looking.
+  function drawInterior(g) {
+    const a = g.yaw;
+    // Window netting covers every window; the panels below hide the rest.
+    if (g.up.nets) {
+      ctx.strokeStyle = 'rgba(28,26,34,0.22)'; ctx.lineWidth = 2.5;
+      const sh = (yawPx * 0.5) % 64;
+      ctx.beginPath();
+      for (let k = -H - 64; k < W + H; k += 64) { ctx.moveTo(k - sh, 0); ctx.lineTo(k - sh + H, H); ctx.moveTo(k - sh, H); ctx.lineTo(k - sh + H, 0); }
+      ctx.stroke();
+    }
+    // Roof liner all the way round
+    ctx.fillStyle = '#2a2632';
+    ctx.fillRect(-W, -H, W * 3, H + 22);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(-W, 16, W * 3, 6);
+
+    const place = (az, fn) => {
+      const d = wrapAngle(az - a);
+      if (Math.abs(d) > 2.4) return;
+      ctx.save();
+      ctx.translate(d * PANO, 0);
+      fn();
+      ctx.restore();
+    };
+    for (const s of [-1, 1]) {
+      place(s * 2.8, pillarPanel);
+      place(s * 2.4, () => rearSidePanel());
+      place(s * 1.95, pillarPanel);
+      place(s * 1.37, () => sidePanel(g, s));
+    }
+    place(Math.PI, () => rearPanel(g));
+    place(0, () => drawFrontPanel(g));
+
     // Red edges when the car takes a hit
     if (g.car.hurt > 0) {
-      const a = g.car.hurt / 0.25 * 0.35;
+      const al = g.car.hurt / 0.25 * 0.35;
       const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.4, W / 2, H / 2, H);
-      v.addColorStop(0, 'rgba(255,40,30,0)'); v.addColorStop(1, `rgba(255,40,30,${a})`);
+      v.addColorStop(0, 'rgba(255,40,30,0)'); v.addColorStop(1, `rgba(255,40,30,${al})`);
       ctx.fillStyle = v; ctx.fillRect(-W, -H, W * 3, H * 3);
     }
+  }
+
+  function pillarPanel() {
+    ctx.fillStyle = '#2a2632';
+    ctx.fillRect(W / 2 - 62, -20, 124, H + 40);
+    ctx.fillStyle = 'rgba(255,255,255,0.06)';
+    ctx.fillRect(W / 2 - 62, -20, 6, H + 40);
+  }
+
+  function doorPanel(x0, x1, top) {
+    const dg = ctx.createLinearGradient(0, top, 0, H);
+    dg.addColorStop(0, '#45404f'); dg.addColorStop(1, '#1c1922');
+    ctx.fillStyle = dg;
+    ctx.fillRect(x0, top, x1 - x0, H - top + 20);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x0, top, x1 - x0, 3);
+  }
+
+  // side: -1 driver's door (look left), 1 passenger door (look right)
+  function sidePanel(g, side) {
+    doorPanel(90, W - 90, 404);
+    // Armrest and handle
+    ctx.fillStyle = '#2e2a36';
+    pill(260, 454, W - 520, 18); ctx.fill();
+    ctx.fillStyle = '#b8b6c4';
+    ctx.fillRect(side < 0 ? 640 : 280, 428, 40, 7);
+    // Side mirror near the front edge of the window
+    const mx = side < 0 ? 680 : 280;
+    ctx.save();
+    ctx.translate(mx, 318);
+    ctx.fillStyle = '#1e1c24'; ctx.fillRect(side < 0 ? 24 : -40, 6, 16, 10);
+    const hous = ctx.createLinearGradient(0, -26, 0, 26);
+    hous.addColorStop(0, isFeral() ? '#c4453a' : '#ff6a5a'); hous.addColorStop(1, '#a9121a');
+    ctx.fillStyle = hous; pill(-34, -26, 68, 52); ctx.fill();
+    const mg = ctx.createLinearGradient(0, -20, 0, 20);
+    mg.addColorStop(0, col('skyLow')); mg.addColorStop(0.6, col('fieldLow')); mg.addColorStop(1, col('road'));
+    ctx.fillStyle = mg; pill(-28, -20, 56, 40); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.35)'; ctx.fillRect(-22, -16, 10, 4);
+    ctx.restore();
+  }
+
+  function rearSidePanel() {
+    doorPanel(60, W - 60, 380);
+  }
+
+  function rearPanel(g) {
+    // Spoiler shadow along the top of the hatch glass
+    ctx.fillStyle = '#2a2632';
+    ctx.fillRect(300, 20, W - 600, 30);
+    // Spare tyre bolted to the hatch, once feral
+    if (isFeral()) {
+      ctx.fillStyle = '#1e1c24'; ctx.beginPath(); ctx.arc(560, 250, 56, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#6d6a7c'; ctx.beginPath(); ctx.arc(560, 250, 22, 0, Math.PI * 2); ctx.fill();
+    }
+    // Rear wiper parked at the bottom of the glass
+    ctx.strokeStyle = '#1e1c24'; ctx.lineWidth = 6; ctx.lineCap = 'round';
+    ctx.beginPath(); ctx.moveTo(480, 326); ctx.lineTo(330, 318); ctx.stroke();
+    // Back seat, headrests, and the picnic basket waiting for sundown
+    const sg = ctx.createLinearGradient(0, 330, 0, H);
+    sg.addColorStop(0, '#4a4454'); sg.addColorStop(1, '#221e2a');
+    ctx.fillStyle = sg;
+    ctx.beginPath();
+    ctx.moveTo(150, H + 20); ctx.lineTo(170, 352); ctx.quadraticCurveTo(480, 330, 790, 352); ctx.lineTo(810, H + 20); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(480, 344); ctx.lineTo(480, H); ctx.moveTo(350, 350); ctx.lineTo(346, H); ctx.moveTo(610, 350); ctx.lineTo(614, H); ctx.stroke();
+    for (const hx of [396, 564]) {
+      ctx.fillStyle = '#2e2a36'; ctx.fillRect(hx - 6, 330, 12, 22);
+      const hg = ctx.createLinearGradient(0, 278, 0, 336);
+      hg.addColorStop(0, '#5a5466'); hg.addColorStop(1, '#3a3542');
+      ctx.fillStyle = hg; pill(hx - 48, 278, 96, 56); ctx.fill();
+    }
+    ctx.save(); ctx.translate(480, 372); ctx.scale(3.2, 3.2); drawBasket(0, 0); ctx.restore();
   }
 
   // The whole world pass for windshield mode.
   function drawDriveWorld(g) {
     drive.camH = g.up.tires ? 1250 : 1000;
+    camCos = Math.cos(g.yaw); camSin = Math.sin(g.yaw);
+    yawPx = g.yaw * PANO;
     const bg = g.bgCam;
     drawSky(g);
     if (state === 'sunset') drawStars(g);
@@ -3368,18 +3545,120 @@
     drawRoad3D(g);
     drawSprites(g);
     drawWeatherFP(g);
-    drawCockpit(g);
+    drawInterior(g);
+    yawPx = 0;
   }
 
   // Off-screen indicator position and distance, shared by both modes.
   function tornadoZX(T) {
     if (game.mode !== 'drive') return screenXOf(tornadoGroundX(T));
     const ts = game.torScreen;
-    if (!ts || T.z < game.dist + NEAR) return tornadoGroundX(T) < game.lane ? -100 : W + 100;
+    if (!ts) {
+      const bearing = wrapAngle(Math.atan2(tornadoGroundX(T) - game.lane, T.z - game.dist) - game.yaw);
+      return bearing < 0 ? -100 : W + 100;
+    }
     return W / 2 + (ts.x - zoomFocus()) * game.zoom;
   }
   function tornadoMiles(T) {
     return game.mode === 'drive' ? driveMiles(T) : Math.abs(game.car.x - tornadoGroundX(T)) * MI_PER_PX;
+  }
+
+  // ---- Focus. Racking takes a moment after zooming, and drifts while the
+  // lens is still zooming or swinging after a moving storm.
+  function updateFocus(g, dt) {
+    if (g.zoom <= 1.02) {
+      g.focus = 1; g.focusBeeped = false; g.prevZoom = g.zoom; g.prevAim = g.aimX;
+      return;
+    }
+    if ((g.prevZoom || 1) <= 1.02) g.focus = 0.15;
+    const zr = Math.abs(g.zoom - (g.prevZoom || g.zoom)) / Math.max(dt, 1e-3);
+    const ar = Math.abs(g.aimX - (g.prevAim || g.aimX)) / Math.max(dt, 1e-3);
+    const yr = Math.abs(g.yawRate || 0);
+    if (zr > 0.3 || ar > 90 || yr > 0.4) g.focus = Math.max(0, g.focus - dt * 2.5);
+    else g.focus = Math.min(1, g.focus + dt * 1.25);
+    if (g.focus > 0.95 && !g.focusBeeped) { g.focusBeeped = true; sfx.focus(); }
+    if (g.focus < 0.7) g.focusBeeped = false;
+    g.prevZoom = g.zoom; g.prevAim = g.aimX;
+  }
+
+  // ---- A film SLR's viewfinder: masked frame, split-image focusing circle
+  // with a microprism collar, and an LED strip underneath.
+  function drawViewfinder(g) {
+    const a = clamp((g.zoom - 1) * 2, 0, 1);
+    const fx = 26, fy = 8, fw = SW - 52, fh = 178;
+    const cx = SW / 2, cy = Math.round(ZOOM_Y * PX), r = 15;
+    const t = performance.now() / 1000;
+    ctx.save();
+    ctx.globalAlpha = a;
+
+    // Split image: the top and bottom halves slide apart until it's sharp.
+    const off = Math.round((1 - g.focus) * 9);
+    if (off > 0) {
+      for (const [y0, dx] of [[cy - r, -off], [cy, off]]) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.clip();
+        ctx.beginPath(); ctx.rect(cx - r, y0, r * 2, r); ctx.clip();
+        ctx.drawImage(canvas, cx - r + dx, y0, r * 2, r, cx - r, y0, r * 2, r);
+        ctx.restore();
+      }
+    }
+    // Microprism collar shimmers while out of focus.
+    const shimmer = (1 - g.focus) * 0.7;
+    if (shimmer > 0.05) {
+      for (let k = 0; k < 40; k++) {
+        const ang = k / 40 * Math.PI * 2, rr = r + 2 + (k % 2) * 2;
+        ctx.fillStyle = (k + Math.floor(t * 12)) % 2 ? `rgba(255,255,255,${shimmer})` : `rgba(0,0,0,${shimmer})`;
+        ctx.fillRect(Math.round(cx + Math.cos(ang) * rr), Math.round(cy + Math.sin(ang) * rr), 1, 1);
+      }
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(cx + 0.5, cy + 0.5, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(cx + 0.5, cy + 0.5, r + 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.3)'; ctx.fillRect(cx - r, cy, r * 2, 1);
+
+    // Darker toward the corners of the frame
+    const vg = ctx.createRadialGradient(cx, cy, fh * 0.35, cx, cy, fw * 0.62);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.45)');
+    ctx.fillStyle = vg; ctx.fillRect(fx, fy, fw, fh);
+
+    // Mirror blackout as the shutter fires
+    if (g.blackout > 0) { ctx.fillStyle = '#000'; ctx.fillRect(fx, fy, fw, fh); }
+
+    // The mask around a rounded frame
+    ctx.fillStyle = 'rgba(6,5,8,0.94)';
+    ctx.beginPath();
+    ctx.rect(0, 0, SW, SH);
+    if (ctx.roundRect) ctx.roundRect(fx, fy, fw, fh, 8); else ctx.rect(fx, fy, fw, fh);
+    ctx.fill('evenodd');
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(fx + 0.5, fy + 0.5, fw - 1, fh - 1, 8); else ctx.rect(fx, fy, fw, fh); ctx.stroke();
+
+    // LED strip: shutter, aperture, lens, match-needle meter, focus, frames
+    const ly = fy + fh + 9;
+    const light = 1 - dusk * 0.75 - (g.rain || 0) * 0.3 - (g.night || 0) * 0.3;
+    const meter = light > 0.78 ? 0 : light > 0.45 ? 1 : 2;
+    const shutter = ['1/500', '1/250', '1/60'][meter];
+    const aperture = ['F11', 'F8', 'F2.8'][meter];
+    const lensMM = Math.round(50 * g.zoom / 5) * 5;
+    const led = '#7dff8a', dim = '#1e3a24';
+    ctx.font = `8px ${FONT}`; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+    ctx.fillStyle = led;
+    ctx.fillText(shutter, fx + 4, ly);
+    ctx.fillText(aperture, fx + 52, ly);
+    ctx.fillText(`${lensMM}MM`, fx + 92, ly);
+    // Meter: + o -
+    ['+', 'O', '-'].forEach((ch, i) => {
+      ctx.fillStyle = i === meter ? (i === 1 ? led : '#ff4a3d') : dim;
+      ctx.fillText(ch, fx + 168 + i * 14, ly);
+    });
+    // Focus confirm
+    const inFocus = g.focus > 0.95;
+    ctx.fillStyle = inFocus ? led : (Math.floor(t * 4) % 2 ? '#ffb43c' : dim);
+    ctx.fillRect(fx + 226, ly + 1, 6, 6);
+    ctx.fillStyle = led;
+    ctx.textAlign = 'right';
+    ctx.fillText(`${g.film}`, fx + fw - 4, ly);
+    ctx.restore();
   }
 
   // ---------------------------------------------------------------- loop
