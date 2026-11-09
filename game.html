@@ -74,6 +74,10 @@
       right: calc(112px + env(safe-area-inset-right)); bottom: 22px; width: 56px; height: 56px; font-size: 8px;
       border-color: #ffe680;
     }
+    .controls [data-key="brake"] {
+      left: calc(54px + env(safe-area-inset-left)); bottom: 96px; width: 56px; height: 56px; font-size: 7px;
+      border-color: #9fe0ff;
+    }
     .controls [data-key="pause"] {
       right: calc(14px + env(safe-area-inset-right)); top: 50%; transform: translateY(-50%);
       width: 40px; height: 40px; font-size: 10px; background: rgba(20, 16, 40, 0.2);
@@ -83,6 +87,7 @@
   @media (pointer: coarse) {
     body:not([data-state="play"]) .controls button { display: none; }
     body[data-state="paused"] .controls [data-key="pause"] { display: flex; }
+    body:not([data-mode="drive"]) .controls [data-key="brake"] { display: none; }
   }
   @media (pointer: coarse) and (orientation: portrait) {
     #rotate { display: flex; }
@@ -110,11 +115,12 @@
         <div class="controls" aria-hidden="true">
           <button data-key="left">&#9664;</button>
           <button data-key="right">&#9654;</button>
+          <button data-key="brake">BRAKE</button>
           <button data-key="zoom">ZOOM</button>
           <button data-key="shutter">SNAP</button>
           <button data-key="pause">II</button>
         </div>
-        <p class="howto keys">&larr; &rarr; / A D drive &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
+        <p class="howto keys">&larr; &rarr; / A D drive or steer &nbsp;·&nbsp; &uarr; &darr; speed up, brake (windshield view) &nbsp;·&nbsp; hold Z / SHIFT zoom &nbsp;·&nbsp; SPACE take a photo, advance text &nbsp;·&nbsp; P pause &nbsp;·&nbsp; M sound</p>
         <p class="howto">Get close, or zoom in, for a better photo, but stay out of the hail and the debris. 24 frames. Sunset ends the chase. Sound on.</p>
 
       </div>

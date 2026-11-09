@@ -233,7 +233,7 @@
   function stormCloseness() {
     const T = game && game.tor;
     if (!T || state !== 'play') return 0;
-    return clamp(1 - Math.abs(game.car.x - tornadoGroundX(T)) / 900, 0, 1) * T.alpha;
+    return clamp(1 - tornadoMiles(T) / 1.35, 0, 1) * T.alpha;
   }
 
   function scheduleMusic() {
@@ -386,13 +386,19 @@
   };
 
   // ---------------------------------------------------------------- input
-  const keys = { left: false, right: false, zoom: false };
+  const keys = { left: false, right: false, zoom: false, gas: false, brake: false };
   const KEYMAP = {
     ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right',
     KeyZ: 'zoom', ShiftLeft: 'zoom', ShiftRight: 'zoom',
+    ArrowUp: 'gas', KeyW: 'gas', ArrowDown: 'brake', KeyS: 'brake',
   };
 
   window.addEventListener('keydown', (e) => {
+    if (state === 'title' && (KEYMAP[e.code] === 'left' || KEYMAP[e.code] === 'right')) {
+      e.preventDefault();
+      if (!e.repeat) chooseMode(KEYMAP[e.code] === 'left' ? 'side' : 'drive');
+      return;
+    }
     if (KEYMAP[e.code]) { keys[KEYMAP[e.code]] = true; e.preventDefault(); return; }
     if (e.code === 'Space' || e.code === 'Enter') {
       e.preventDefault();
@@ -409,7 +415,17 @@
   });
 
   // Tapping the canvas starts the game or takes a photo.
-  canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); canvas.focus(); action(); });
+  canvas.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    canvas.focus();
+    if (state === 'title') {
+      // Tapping a half of the title screen picks that view.
+      const r = canvas.getBoundingClientRect();
+      const rx = (e.clientX - r.left) / r.width, ry = (e.clientY - r.top) / r.height;
+      if (TOUCH || (ry > 0.56 && ry < 0.76)) chooseMode(rx < 0.5 ? 'side' : 'drive', true);
+    }
+    action();
+  });
 
   document.querySelectorAll('.controls button').forEach((btn) => {
     const k = btn.dataset.key;
@@ -463,7 +479,7 @@
     else if (state === 'play') takePhoto();
     else if (state === 'paused') togglePause();
     else if (state === 'dialog') advanceDialog();
-    else if (state === 'over' && performance.now() - game.overAt > 1000) startGame();
+    else if (state === 'over' && performance.now() - game.overAt > 1000) toTitle();
     else if (state === 'sunset' && game.st > 2 && game.swept < 0) endGame('Sunset. You called it a day.');
   }
 
@@ -477,9 +493,13 @@
   let game;
   let best = loadBest();
   let round = 0;             // which ambient song plays rotates with each round
+  let selMode = 'side';      // 'side' or 'drive' (windshield)
+  try { if (localStorage.getItem('dinnerDateMode') === 'drive') selMode = 'drive'; } catch (e) { /* ignore */ }
 
-  function newGame() {
+  function newGame(mode = 'side') {
     return {
+      mode, lane: 0, dist: 0, speed: 0, steerVis: 0, bgCam: 0,
+      fpHail: [], fpDebris: [], splats: [], rain: 0, torScreen: null, picnic: null,
       t: 0, score: 0, film: FILM, frames: 0,
       car: { x: 0, vx: 0, hp: 100, dir: 1, hurt: 0, wheel: 0 },
       camX: -W / 2,
@@ -494,12 +514,38 @@
   }
 
   function startGame() {
-    game = newGame();
+    game = newGame(selMode);
+    if (selMode === 'drive') game.speed = 3200;
     state = 'play';
     round++;
     setSong(round - 1);
     setMusicMode('ambient');
     flashMsg('Storms are firing. Go find a tornado.');
+  }
+
+  // The title screen shows a little demo of whichever view is selected.
+  function titleDemo(mode) {
+    game = newGame(mode);
+    if (mode === 'drive') {
+      game.speed = 3200;
+      spawnDriveTornado();
+      Object.assign(game.tor, { x: 2600, z: 9000, phase: 'mature', alpha: 1, life: 1e9, tvx: 0, vx: 0 });
+    } else {
+      spawnTornado(0);
+      Object.assign(game.tor, { x: 260, phase: 'mature', alpha: 1, life: 1e9, core: 1 });
+    }
+  }
+
+  function chooseMode(mode, quiet) {
+    if (mode === selMode) return;
+    selMode = mode;
+    try { localStorage.setItem('dinnerDateMode', mode); } catch (e) { /* ignore */ }
+    if (!quiet) { titleDemo(mode); sfx.blip(); }
+  }
+
+  function toTitle() {
+    state = 'title';
+    titleDemo(selMode);
   }
 
   function endGame(reason) {
@@ -576,10 +622,16 @@
     if (!T) {
       if (state === 'sunset') return;
       game.nextTor -= dt;
-      if (game.nextTor <= 0) spawnTornado(game.car.x);
+      if (game.nextTor <= 0) { if (game.mode === 'drive') spawnDriveTornado(); else spawnTornado(game.car.x); }
       return;
     }
     T.pt += dt;
+    if (game.mode === 'drive') driveTornadoMotion(T, dt);
+    else sideTornadoMotion(T, dt);
+    phaseTornado(T);
+  }
+
+  function sideTornadoMotion(T, dt) {
     T.retarget -= dt;
     if (T.finale) {
       T.retarget = 1;
@@ -593,7 +645,9 @@
     T.vx += (T.tvx - T.vx) * Math.min(1, dt * 0.7);
     T.x += T.vx * dt;
     T.lean += ((T.vx / 100) * 45 - T.lean) * Math.min(1, dt);
+  }
 
+  function phaseTornado(T) {
     if (T.phase === 'forming') {
       T.alpha = Math.min(1, T.pt / 3.5);
       if (T.pt >= 4) { T.phase = 'mature'; T.pt = 0; flashMsg(`Touchdown! Rated EF${T.ef}.`); sfx.touchdown(); }
@@ -709,6 +763,32 @@
       text: 'In a world that really has been turned on its head, truth is a moment of falsehood.' },
     { who: 'ADORNO & HORKHEIMER', src: 'Dialectic of Enlightenment, 1944', tags: ['hurt', 'score'],
       text: 'The fully enlightened earth radiates disaster triumphant.' },
+    { who: 'W. J. T. MITCHELL', src: 'Iconology, 1986', tags: ['any', 'score'],
+      text: 'The image is the sign that pretends not to be a sign, masquerading as (or, for the believer, actually achieving) natural immediacy and presence.' },
+    { who: 'W. J. T. MITCHELL', src: 'Picture Theory, 1994', tags: ['any', 'far'],
+      text: 'The problem of the twenty-first century is the problem of the image.' },
+    { who: 'W. J. T. MITCHELL', src: 'What Do Pictures Want?, 2005', tags: ['empty', 'miss', 'zoom'],
+      text: 'What pictures want in the last instance, then, is simply to be asked what they want, with the understanding that the answer may well be, nothing at all.' },
+    { who: 'KARL MARX', src: 'Capital, Vol. 1, 1867', tags: ['score', 'any'],
+      text: 'It is nothing but the definite social relation between men themselves which assumes here, for them, the fantastic form of a relation between things.' },
+    { who: 'MARX & ENGELS', src: 'The Communist Manifesto, 1848', tags: ['score'],
+      text: 'It has resolved personal worth into exchange value.' },
+    { who: 'MARX & ENGELS', src: 'The Communist Manifesto, 1848', tags: ['score', 'hurt'],
+      text: 'It has left remaining no other nexus between man and man than naked self-interest, than callous "cash payment".' },
+    { who: 'GEORG SIMMEL', src: 'The Metropolis and Mental Life, 1903', tags: ['score', 'far'],
+      text: 'Money becomes the most frightful leveler. Money, with all its colorlessness and indifference, becomes the common denominator of all values.' },
+    { who: 'GUY DEBORD', src: 'The Society of the Spectacle, 1967', tags: ['score', 'any'],
+      text: 'The spectacle is capital accumulated to the point where it becomes image.' },
+    { who: 'SUSAN SONTAG', src: 'On Photography, 1977', tags: ['close', 'far', 'zoom'],
+      text: 'Photographing is essentially an act of non-intervention.' },
+    { who: 'SUSAN SONTAG', src: 'Regarding the Pain of Others, 2003', tags: ['zoom', 'score'],
+      text: 'Photographs objectify: they turn an event or a person into something that can be possessed.' },
+    { who: 'SUSAN SONTAG', src: 'Regarding the Pain of Others, 2003', tags: ['hurt', 'far'],
+      text: 'Compassion is an unstable emotion. It needs to be translated into action, or it withers.' },
+    { who: 'JOHN BERGER', src: 'Ways of Seeing, 1972', tags: ['any'],
+      text: 'Every image embodies a way of seeing.' },
+    { who: 'JOHN BERGER', src: 'Uses of Photography, 1978', tags: ['rope', 'far'],
+      text: 'The camera relieves us of the burden of memory. It surveys us like God, and it surveys for us.' },
   ];
 
   function pickQuote(tag) {
@@ -777,6 +857,12 @@
       finale: false, swept: -1, cheered: false, dialogDelay: 0, pickup: null, msgT: 0,
     });
     keys.zoom = false;
+    if (g.mode === 'drive') {
+      // Picnic in the field ahead and to the right; the drawing reuses the side-view layout.
+      const stopping = (g.speed * g.speed) / (2 * 3500); // the car coasts to a stop first
+      g.picnic = { x: ROAD_W * 1.8, z: g.dist + stopping + 5200 };
+      g.car.x = 0; g.car.dir = 1; g.px = 140;
+    }
     if (g.tor && g.tor.phase !== 'roping') { g.tor.phase = 'roping'; g.tor.pt = 0; }
     setMusicMode('ambient');
     sfx.sundown();
@@ -799,12 +885,20 @@
     }
     if (!g.finale && g.st > CHEERS_AT + LINGER) {
       g.finale = true;
-      spawnTornado(g.px);
-      Object.assign(g.tor, { x: g.px + 760, ef: 4, size: 0.75 + 4 * 0.11, life: 1e9, finale: true, core: 1 });
+      if (g.mode === 'drive') {
+        spawnDriveTornado();
+        Object.assign(g.tor, { x: g.picnic.x + 13000, z: g.picnic.z + 9000, ef: 4, size: 0.75 + 4 * 0.11, life: 1e9, finale: true, core: 1 });
+      } else {
+        spawnTornado(g.px);
+        Object.assign(g.tor, { x: g.px + 760, ef: 4, size: 0.75 + 4 * 0.11, life: 1e9, finale: true, core: 1 });
+      }
       sfx.omen();
     }
     const T = g.tor;
-    if (g.finale && T && g.swept < 0 && tornadoOnGround(T) && Math.abs(tornadoGroundX(T) - g.px) < 60) {
+    const reached = T && (g.mode === 'drive'
+      ? Math.hypot(tornadoGroundX(T) - g.picnic.x, T.z - g.picnic.z) < 700
+      : Math.abs(tornadoGroundX(T) - g.px) < 60);
+    if (g.finale && T && g.swept < 0 && tornadoOnGround(T) && reached) {
       g.swept = 0;
       sfx.swept();
     }
@@ -929,7 +1023,7 @@
     const px = g.px - cam;
     const sw = g.swept;
     const T = g.tor;
-    const gx = T ? tornadoGroundX(T) - cam : px;
+    const gx = g.mode === 'drive' || !T ? px : tornadoGroundX(T) - cam;
     // Something swept up spirals into the funnel and rises to the cloud.
     const fly = (i, r0) => {
       const k = Math.min(1, Math.pow(sw / 3.6, 1.4));
@@ -1059,17 +1153,17 @@
     const T = game.tor;
     const z = game.zoom;
     let points = 0, short = 'Empty sky.', tag = 'empty';
-    if (T && T.alpha > 0.25) {
-      const gx = tornadoGroundX(T);
-      const zx = screenXOf(gx);
+    const ahead = !T || game.mode !== 'drive' || T.z > game.dist + NEAR;
+    if (T && T.alpha > 0.25 && ahead) {
+      const zx = tornadoZX(T);
       const phaseName = { forming: 'funnel', mature: 'tornado', roping: 'rope-out' }[T.phase];
       if (zx < -30 || zx > W + 30) {
         short = 'Missed it. Out of frame.';
         tag = 'miss';
       } else {
-        const d = Math.abs(game.car.x - gx);
+        const d = tornadoMiles(T);
         const dEff = d / z; // zooming in stands in for getting closer
-        const closeness = clamp(1 - (dEff - 60) / 750, 0, 1);
+        const closeness = clamp(1 - (dEff - 0.09) / 1.125, 0, 1);
         const framing = 1 - 0.4 * Math.min(1, Math.abs(zx - W / 2) / (W / 2));
         const phaseMult = T.phase === 'forming' ? 0.6 : T.phase === 'roping' ? 1.4 : 1;
         const reach = tornadoReach(T);
@@ -1079,12 +1173,15 @@
         if (points < 15) short = 'Too far.';
         tag = game.lightning > 0 ? 'lightning'
           : game.car.hp < 40 ? 'hurt'
-          : d < 170 ? 'close'
+          : d < 0.255 ? 'close'
           : z > 1.6 ? 'zoom'
           : T.phase === 'roping' ? 'rope'
           : points >= 110 ? 'score'
-          : dEff > 450 ? 'far' : 'any';
+          : dEff > 0.675 ? 'far' : 'any';
       }
+    } else if (T && T.alpha > 0.25) {
+      short = 'Missed it. It\'s behind you.';
+      tag = 'miss';
     }
     game.score += points;
     sfx.score(points);
@@ -1098,6 +1195,7 @@
 
   // ---------------------------------------------------------------- update
   function update(dt) {
+    if (game.mode === 'drive') { updateDrive(dt); return; }
     const g = game;
     if (state === 'play') g.t += dt;
     const c = g.car;
@@ -1325,6 +1423,8 @@
     ctx.translate(-zoomFocus(), -ZOOM_Y);
     if (g.shake > 0) ctx.translate(Math.round(rand(-1, 1) * g.shake / 2.5) * 2.5, Math.round(rand(-1, 1) * g.shake / 2.5) * 2.5);
 
+    if (g.mode === 'drive') drawDriveWorld(g);
+    else {
     drawSky(g);
     drawHills(cam);
     drawField(g, cam);
@@ -1344,6 +1444,7 @@
     drawHail(g, cam);
     drawDebris(g, cam);
     drawFence(cam);
+    }
 
     if (g.lightning > 0) {
       ctx.fillStyle = `rgba(255,250,224,${0.3 * (g.lightning / 0.3)})`;
@@ -1376,7 +1477,7 @@
     if (state === 'over') {
       drawCenter(g.endReason, `${g.frames} frames exposed. Score ${g.score}. Best ${best}.`);
       if (performance.now() - g.overAt > 1000 && Math.floor(performance.now() / 500) % 2) {
-        text(TOUCH ? 'TAP TO CHASE AGAIN' : 'PRESS SPACE OR TAP TO CHASE AGAIN', SW / 2, SH / 2 + 26, { align: 'center', color: '#ffe680' });
+        text(TOUCH ? 'TAP TO CONTINUE' : 'PRESS SPACE OR TAP TO CONTINUE', SW / 2, SH / 2 + 26, { align: 'center', color: '#ffe680' });
       }
     }
   }
@@ -2260,6 +2361,10 @@
     const sx = p.x - cam;
     if (sx < -60 || sx > W + 60) return;
     const y = ROAD_Y - 40 + Math.sin(g.t * 3) * 5;
+    drawPickupAt(p.kind, sx, y);
+  }
+
+  function drawPickupAt(kind, sx, y) {
     const glow = ctx.createRadialGradient(sx, y, 4, sx, y, 40);
     glow.addColorStop(0, 'rgba(255,230,120,0.75)');
     glow.addColorStop(1, 'rgba(255,230,120,0)');
@@ -2272,26 +2377,26 @@
     ctx.save();
     ctx.translate(sx, y);
     ctx.lineWidth = 2.5;
-    if (p.kind === 'nets') {
+    if (kind === 'nets') {
       ctx.strokeStyle = '#2a2830';
       ctx.strokeRect(-10, -8, 20, 16);
       ctx.save(); ctx.beginPath(); ctx.rect(-10, -8, 20, 16); ctx.clip();
       ctx.beginPath();
       for (let k = -18; k <= 10; k += 6) { ctx.moveTo(k, 8); ctx.lineTo(k + 8, -8); ctx.moveTo(k, -8); ctx.lineTo(k + 8, 8); }
       ctx.stroke(); ctx.restore();
-    } else if (p.kind === 'roof') {
+    } else if (kind === 'roof') {
       ctx.fillStyle = '#9c9aa8';
       ctx.fillRect(-12, -6, 24, 12);
       ctx.strokeStyle = '#3a3842';
       ctx.strokeRect(-12, -6, 24, 12);
       ctx.fillStyle = '#3a3842';
       for (const rx of [-8, 0, 8]) { ctx.fillRect(rx - 1.5, -3, 3, 3); }
-    } else if (p.kind === 'tires') {
+    } else if (kind === 'tires') {
       ctx.fillStyle = '#26242c';
       ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = '#c9c6d4';
       ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI * 2); ctx.fill();
-    } else if (p.kind === 'radar') {
+    } else if (kind === 'radar') {
       ctx.strokeStyle = '#2a8a3a';
       ctx.beginPath(); ctx.arc(0, 2, 10, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
       ctx.beginPath(); ctx.arc(0, 2, 5, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
@@ -2315,36 +2420,41 @@
       if (sx < -30 || sx > W + 30) continue;
       ctx.save();
       ctx.translate(sx, p.y);
-      if (p.cow) {
-        // A very surprised cow.
-        ctx.rotate(p.rot * 0.35);
-        ctx.strokeStyle = '#3a3440';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        for (const lx of [-6, -2, 3, 7]) { ctx.moveTo(lx, 3); ctx.lineTo(lx + Math.sin(g.t * 20 + lx) * 2, 9); }
-        ctx.stroke();
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath(); ctx.ellipse(0, 0, 10, 6, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.lineWidth = 1;
-        ctx.stroke();
-        ctx.fillStyle = '#3a3440';
-        ctx.beginPath(); ctx.arc(-4, -1, 2.6, 0, Math.PI * 2); ctx.arc(4, 2, 2, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath(); ctx.arc(11, -4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
-        ctx.fillStyle = '#ffb3c1';
-        ctx.beginPath(); ctx.ellipse(14, -3, 2, 1.6, 0, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#3a3440';
-        ctx.beginPath(); ctx.arc(11, -5.5, 0.9, 0, Math.PI * 2); ctx.fill();
-      } else {
-        ctx.rotate(p.rot);
-        ctx.fillStyle = '#9a6a44';
-        pill(-p.w / 2, -p.h / 2, p.w, p.h);
-        ctx.fill();
-        ctx.fillStyle = 'rgba(255,220,170,0.6)';
-        ctx.fillRect(-p.w / 2 + 1, -p.h / 2, p.w - 2, 1);
-      }
+      drawDebrisPiece(p, g.t);
       ctx.restore();
+    }
+  }
+
+  // One piece of flying debris (a board or a very surprised cow) at the origin.
+  function drawDebrisPiece(p, t) {
+    if (p.cow) {
+      // A very surprised cow.
+      ctx.rotate(p.rot * 0.35);
+      ctx.strokeStyle = '#3a3440';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (const lx of [-6, -2, 3, 7]) { ctx.moveTo(lx, 3); ctx.lineTo(lx + Math.sin(t * 20 + lx) * 2, 9); }
+      ctx.stroke();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.ellipse(0, 0, 10, 6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = '#3a3440';
+      ctx.beginPath(); ctx.arc(-4, -1, 2.6, 0, Math.PI * 2); ctx.arc(4, 2, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(11, -4, 4, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#ffb3c1';
+      ctx.beginPath(); ctx.ellipse(14, -3, 2, 1.6, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#3a3440';
+      ctx.beginPath(); ctx.arc(11, -5.5, 0.9, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.rotate(p.rot);
+      ctx.fillStyle = '#9a6a44';
+      pill(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.fill();
+      ctx.fillStyle = 'rgba(255,220,170,0.6)';
+      ctx.fillRect(-p.w / 2 + 1, -p.h / 2, p.w - 2, 1);
     }
   }
 
@@ -2380,8 +2490,9 @@
 
     if (state === 'dialog') return;
 
-    // Car health (top right on touch screens, where thumbs don't cover it)
-    const hy = TOUCH ? 18 : SH - 13, hx = TOUCH ? SW - 96 : 6;
+    // Car health (top right on touch screens and in the windshield view)
+    const topRow = TOUCH || g.mode === 'drive';
+    const hy = topRow ? 18 : SH - 13, hx = topRow ? SW - 96 : 6;
     text('CAR', hx, hy);
     ctx.fillStyle = SHADOW;
     ctx.fillRect(hx + 27, hy - 1, 62, 10);
@@ -2394,12 +2505,12 @@
       ctx.fillStyle = g.car.hp > 30 ? '#b8f0a0' : '#ff9a8a';
       ctx.fillRect(hx + 28, hy, w, 2);
     }
-    const ry = TOUCH ? 30 : SH - 13;
+    const ry = topRow ? 30 : SH - 13;
 
-    if (g.up.radar) drawRadar(g);
+    if (g.up.radar && g.mode !== 'drive') drawRadar(g);
 
     // Off-screen pickup marker
-    if (g.pickup) {
+    if (g.pickup && g.mode !== 'drive') {
       const zx = screenXOf(g.pickup.x);
       if (zx < 0 || zx > W) {
         const isLeft = zx < 0;
@@ -2412,10 +2523,9 @@
 
     const T = g.tor;
     if (T && T.alpha > 0.2) {
-      const gx = tornadoGroundX(T);
-      const d = Math.abs(g.car.x - gx);
-      text(`RANGE ${(d * MI_PER_PX).toFixed(1)}MI`, SW - 6, ry, { align: 'right' });
-      const zx = screenXOf(gx);
+      const dMi = tornadoMiles(T);
+      text(`RANGE ${dMi.toFixed(1)}MI`, SW - 6, ry, { align: 'right' });
+      const zx = tornadoZX(T);
       if (zx < 0 || zx > W) {
         const isLeft = zx < 0;
         const ax = isLeft ? 4 : SW - 4, ay = 96;
@@ -2423,7 +2533,7 @@
         tri(ax + 1, ay + 1, isLeft);
         ctx.fillStyle = '#ff4a3d';
         tri(ax, ay, isLeft);
-        text(`${(d * MI_PER_PX).toFixed(1)}`, ax + (isLeft ? 2 : -2), ay + 10, { align: isLeft ? 'left' : 'right' });
+        text(`${dMi.toFixed(1)}`, ax + (isLeft ? 2 : -2), ay + 10, { align: isLeft ? 'left' : 'right' });
       }
     } else {
       text('SCANNING...', SW - 6, ry, { align: 'right' });
@@ -2544,18 +2654,736 @@
   function drawTitle() {
     ctx.fillStyle = 'rgba(28,20,48,0.2)';
     ctx.fillRect(0, 0, SW, SH);
-    text('A DINNER DATE', SW / 2, 46, { size: 16, align: 'center', color: '#ffffff', outline: true });
-    text('WITH THE SUBLIME', SW / 2, 68, { size: 16, align: 'center', color: '#ff4a3d', outline: true });
-    text('Drive close. Take the picture.', SW / 2, 100, { align: 'center' });
-    text('Get out alive.', SW / 2, 112, { align: 'center' });
-    if (Math.floor(performance.now() / 500) % 2) text(TOUCH ? 'TAP TO START' : 'PRESS SPACE OR TAP', SW / 2, 140, { align: 'center', color: '#ffe680' });
-    if (best > 0) text(`BEST ${best}`, SW / 2, 158, { align: 'center' });
+    text('A DINNER DATE', SW / 2, 40, { size: 16, align: 'center', color: '#ffffff', outline: true });
+    text('WITH THE SUBLIME', SW / 2, 62, { size: 16, align: 'center', color: '#ff4a3d', outline: true });
+    text('Drive close. Take the picture.', SW / 2, 90, { align: 'center' });
+    text('Get out alive.', SW / 2, 102, { align: 'center' });
+    // View picker
+    for (const [mode, label, cx] of [['side', 'SIDE VIEW', SW / 2 - 76], ['drive', 'WINDSHIELD', SW / 2 + 76]]) {
+      const on = selMode === mode;
+      if (on) drawPanel(cx - 62, 126, 124, 22);
+      else { ctx.fillStyle = 'rgba(28,20,48,0.45)'; ctx.fillRect(cx - 62, 126, 124, 22); }
+      text(label, cx, 133, { align: 'center', color: on ? '#ffe680' : '#b8b0d8' });
+    }
+    const blink = Math.floor(performance.now() / 500) % 2;
+    if (TOUCH) { if (blink) text('TAP A VIEW TO START', SW / 2, 158, { align: 'center', color: '#ffe680' }); }
+    else {
+      text('< > CHOOSE A VIEW', SW / 2, 156, { align: 'center' });
+      if (blink) text('PRESS SPACE TO START', SW / 2, 168, { align: 'center', color: '#ffe680' });
+    }
+    if (best > 0) text(`BEST ${best}`, SW / 2, 184, { align: 'center' });
+  }
+
+
+  // ================================================================ windshield
+  // First-person mode: looking down a curving prairie road through the
+  // windshield. The road is drawn as projected segments, and everything else
+  // (tornadoes, cows, posts, debris) as sprites placed along it.
+  // World units: x across the road (0 = centre line), z down the road.
+  const SEG = 200;            // length of one road segment
+  const DRAW = 220;           // segments drawn ahead
+  const ROAD_W = 1500;        // half-width of the road
+  const CAM_DEPTH = 0.84;     // ~100 degree field of view
+  const NEAR = 260;
+  const MI_PER_U = 1 / 25000;
+  const DASH_Y = 446;         // top of the dashboard
+  const drive = { base: 0, segX: new Float32Array(DRAW + 2), camH: 1000 };
+
+  function curveAt(i) {
+    return 3.2 * Math.sin(i * 0.0061) * Math.sin(i * 0.0023 + 1.3) + 1.1 * Math.sin(i * 0.017 + 2);
+  }
+  const driveMax = () => (game.up.tires ? 9000 : 7500);
+
+  function spawnDriveTornado() {
+    const g = game, side = Math.random() < 0.5 ? -1 : 1, ef = pickEF();
+    g.tor = {
+      x: side * rand(4000, 11000), z: g.dist + rand(15000, 25000),
+      vx: 0, vz: 0, tvx: -side * rand(400, 1000), tvz: rand(-300, 300), retarget: rand(2, 4),
+      ef, size: 0.75 + ef * 0.11, phase: 'forming', pt: 0, life: rand(10, 18),
+      alpha: 0, rope: 0, lean: 0, seed: Math.random() * 100,
+      core: Math.random() < 0.6 ? -1 : 1, // -1: the hail core sits between you and the tornado
+    };
+  }
+
+  function driveTornadoMotion(T, dt) {
+    const g = game;
+    if (T.finale) {
+      const dx = g.picnic.x - T.x, dz = g.picnic.z - T.z, d = Math.hypot(dx, dz) || 1;
+      T.tvx = (dx / d) * 1500; T.tvz = (dz / d) * 1500;
+    } else {
+      T.retarget -= dt;
+      if (T.retarget <= 0) {
+        T.retarget = rand(2.5, 5);
+        T.tvx = rand(-1, 1) * (500 + T.ef * 120);
+        T.tvz = rand(-350, 250);
+        // Sometimes it swings toward you.
+        if (state === 'play' && Math.random() < 0.3) { T.tvx = Math.sign(g.lane - T.x) * (700 + T.ef * 100); T.tvz = -rand(200, 700); }
+      }
+    }
+    T.vx += (T.tvx - T.vx) * Math.min(1, dt * 0.8);
+    T.vz += (T.tvz - T.vz) * Math.min(1, dt * 0.8);
+    T.x = clamp(T.x + T.vx * dt, -16000, 16000);
+    T.z += T.vz * dt;
+    T.lean += ((T.vx / 600) * 45 - T.lean) * Math.min(1, dt);
+  }
+
+  function driveCore(T) {
+    const len = 7500 + T.ef * 1000;
+    return T.core < 0 ? [T.z - 1500 - len, T.z - 1500] : [T.z + 1500, T.z + 1500 + len];
+  }
+  const driveMiles = (T) => Math.hypot(tornadoGroundX(T) - game.lane, T.z - game.dist) * MI_PER_U;
+
+  function updateDrive(dt) {
+    const g = game, c = g.car, playing = state === 'play';
+    if (playing) g.t += dt;
+    const maxV = driveMax();
+
+    // Speed: cruise by default, gas to go faster, brake to slow and stop.
+    let target = maxV * 0.72, rate = 2600;
+    if (state === 'title') target = 3200;
+    else if (state === 'sunset' || state === 'over') { target = 0; rate = 3500; }
+    else if (playing) {
+      if (keys.brake) { target = 0; rate = 7000; } else if (keys.gas) target = maxV;
+    }
+    g.speed += clamp(target - g.speed, -rate * dt, rate * dt);
+    const pct = g.speed / maxV;
+    const seg = Math.floor(g.dist / SEG);
+    const curve = curveAt(seg);
+
+    // Steering, with the road's curve pushing you outward.
+    const steer = playing ? (keys.right ? 1 : 0) - (keys.left ? 1 : 0) : 0;
+    g.steerVis += (steer * 0.5 - g.steerVis) * Math.min(1, dt * 6);
+    if (state === 'title') g.lane *= 1 - Math.min(1, dt);
+    else {
+      g.lane += steer * dt * ROAD_W * 1.7 * Math.min(1, pct * 1.4 + 0.25);
+      g.lane -= curve * pct * dt * ROAD_W * 0.09;
+    }
+    if (Math.abs(g.lane) > ROAD_W * 1.02 && g.speed > maxV * 0.35) {
+      g.speed -= (g.speed - maxV * 0.35) * Math.min(1, dt * 2);
+      g.shake = Math.max(g.shake, 1.5 * pct);
+    }
+    g.lane = clamp(g.lane, -ROAD_W * 1.25, ROAD_W * 1.25);
+    g.dist += g.speed * dt;
+    g.bgCam += curve * pct * dt * 420;
+    c.hurt = Math.max(0, c.hurt - dt);
+
+    // Viewfinder zoom pans toward the tornado on screen.
+    const zt = playing && keys.zoom ? MAX_ZOOM : 1;
+    g.zoom += clamp(zt - g.zoom, -dt * 4, dt * 2.2);
+    let aimTarget = W / 2;
+    if (g.tor && keys.zoom && g.torScreen && g.torScreen.x > -60 && g.torScreen.x < W + 60) aimTarget = clamp(g.torScreen.x, 120, W - 120);
+    g.aimX += (aimTarget - g.aimX) * Math.min(1, dt * 2.5);
+    if (playing && g.dialogDelay > 0) {
+      g.dialogDelay -= dt;
+      if (g.dialogDelay <= 0) openDialog(g.dialogQuote);
+    }
+    if (playing) updateDrivePickups(dt);
+
+    // Tornado
+    updateTornado(dt);
+    let T = g.tor;
+    if (T && T.z < g.dist - 300 && !T.finale) {
+      g.tor = null; T = null;
+      g.nextTor = rand(2, 4);
+      if (playing) flashMsg('It\'s behind you now.');
+    }
+
+    // Rain and hail in the core
+    g.rain = 0;
+    if (T && T.alpha > 0.3) {
+      const [a, b] = driveCore(T);
+      const at = g.dist + 600;
+      const inside = at > a && at < b && Math.abs(g.lane - T.x) < 14000;
+      const edge = Math.min(Math.abs(at - a), Math.abs(at - b));
+      g.rain = inside ? 1 : Math.max(0, 1 - edge / 4000) * 0.6;
+      g.rain *= T.alpha;
+      if (inside) {
+        let n = 42 * dt;
+        while (n > 0) { if (Math.random() < n) g.fpHail.push({ x: rand(-40, W + 40), y: rand(-20, 200), vy: rand(700, 1000), vx: rand(-80, 80) }); n -= 1; }
+        if (playing) {
+          damage(1.6 * dt * (g.up.nets ? 0.35 : 1), true);
+          g.hailSound -= dt * 6;
+          if (g.hailSound < 0) { sfx.hail(); g.hailSound = 1; }
+          if (!T.hailWarned) { T.hailWarned = true; flashMsg('Hail! Get out of the core.'); }
+        }
+      }
+    }
+    for (let i = g.fpHail.length - 1; i >= 0; i--) {
+      const h = g.fpHail[i];
+      h.x += h.vx * dt; h.y += h.vy * dt;
+      if (h.y > rand(260, DASH_Y)) {
+        if (Math.random() < 0.3) g.splats.push({ x: h.x, y: h.y, life: 1, r: g.up.nets ? 5 : 9, crack: false });
+        g.fpHail.splice(i, 1);
+      }
+    }
+
+    // Dust and debris from the tornado, flying out across the fields.
+    if (T && tornadoOnGround(T)) {
+      const gx = tornadoGroundX(T);
+      if (Math.random() < 40 * dt) {
+        g.dust.push({ a: rand(0, Math.PI * 2), r: rand(10, 30 + T.ef * 10), y: TOR_GROUND - rand(0, 30), life: rand(0.6, 1.4), max: 1.4, x: gx });
+      }
+      const near = Math.hypot(gx - g.lane, T.z - g.dist);
+      if (near < 16000 && Math.random() < (2 + T.ef * 1.4) * dt * (1 - T.rope * 0.8)) {
+        const ang = rand(0, Math.PI * 2), sp = rand(700, 1900 + T.ef * 200);
+        g.fpDebris.push({
+          x: gx, y: rand(100, 500), z: T.z, vx: Math.cos(ang) * sp, vz: Math.sin(ang) * sp - rand(0, 600), vy: rand(700, 1600),
+          rot: rand(0, 6), vr: rand(-10, 10), w: rand(8, 18), h: rand(3, 6), cow: Math.random() < 0.07,
+        });
+      }
+      // Direct hit
+      const funnelW = funnelAt(T, 1, g.t).w * 6;
+      if (playing && Math.abs(gx - g.lane) < funnelW / 2 + 500 && Math.abs(T.z - (g.dist + 600)) < funnelW / 2 + 500) {
+        damage((15 + T.ef * 5) * dt * (g.up.tires ? 0.7 : 1), true);
+        g.lane += rand(-1, 1) * 2500 * dt * (g.up.tires ? 0.5 : 1);
+        g.shake = Math.max(g.shake, 8);
+      }
+    }
+    for (const d of g.dust) { d.life -= dt; d.a += dt * 4; d.y -= dt * 18; d.r += dt * 6; if (T) d.x = tornadoGroundX(T); }
+    g.dust = g.dust.filter((d) => d.life > 0 && T);
+    for (let i = g.fpDebris.length - 1; i >= 0; i--) {
+      const p = g.fpDebris[i];
+      p.vy -= 1500 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.rot += p.vr * dt;
+      const zc = p.z - g.dist;
+      if (playing && zc > 150 && zc < 900 && Math.abs(p.x - g.lane) < 700 && p.y < 1100) {
+        damage(g.up.roof ? 1.2 : 3);
+        sfx.hit();
+        g.shake = Math.max(g.shake, 6);
+        g.splats.push({ x: clamp(W / 2 + (p.x - g.lane) * 0.3, 120, W - 120), y: rand(140, 330), life: 2.5, r: 26, crack: true, seed: Math.random() * 10 });
+        g.fpDebris.splice(i, 1);
+        continue;
+      }
+      if (p.y < 0 || zc < 0) g.fpDebris.splice(i, 1);
+    }
+    for (const sp of g.splats) sp.life -= dt * (sp.crack ? 0.25 : 0.8);
+    g.splats = g.splats.filter((sp) => sp.life > 0).slice(-40);
+
+    // Lightning, timers and the end of the day.
+    g.lightningCd -= dt;
+    if (g.lightningCd <= 0) {
+      g.lightningCd = rand(3, 8);
+      g.lightning = 0.3;
+      g.bolt = makeBolt(rand(60, W - 60));
+      setTimeout(() => sfx.thunder(), rand(150, 900));
+    }
+    g.lightning = Math.max(0, g.lightning - dt);
+    g.flash = Math.max(0, g.flash - dt * 4);
+    g.shutterCd = Math.max(0, g.shutterCd - dt);
+    g.msgT = Math.max(0, g.msgT - dt);
+    g.shake = Math.max(0, g.shake - dt * 20);
+    if (state === 'title' && g.tor) {
+      g.tor.z = g.dist + 9000 + Math.sin(g.t * 0.3) * 1500;
+      g.t += dt;
+    }
+    if (state === 'sunset') updateSunset(dt);
+    if (playing) {
+      if (c.hp <= 0) endGame('The storm took your car.');
+      else if (g.t >= DAY_LENGTH) startSunset();
+      else if (g.ending > 0) { g.ending -= dt; if (g.ending <= 0) endGame('Out of film.'); }
+    }
+  }
+
+  function updateDrivePickups(dt) {
+    const g = game;
+    const remaining = Object.keys(UPGRADES).filter((k) => !g.up[k]);
+    if (!g.pickup && remaining.length) {
+      g.pickupCd -= dt;
+      if (g.pickupCd <= 0) {
+        g.pickup = { kind: remaining[(Math.random() * remaining.length) | 0], x: rand(-0.7, 0.7) * ROAD_W, z: g.dist + rand(8000, 12000) };
+        flashMsg('Something on the road ahead...');
+      }
+    }
+    const p = g.pickup;
+    if (!p) return;
+    const zc = p.z - g.dist;
+    if (zc < 750 && zc > 0 && Math.abs(p.x - g.lane) < 650) installUpgrade(p.kind);
+    else if (zc < 0) { g.pickup = null; g.pickupCd = rand(3, 6); }
+  }
+
+  // ---------------------------------------------------------------- windshield drawing
+  // Project a world point using this frame's road; k is pixels per world unit.
+  function spriteAt(wx, wy, wz) {
+    const g = game;
+    const zc = wz - g.dist;
+    if (zc < NEAR) return null;
+    const n = (wz - drive.base * SEG) / SEG;
+    const i0 = clamp(Math.floor(n), 0, DRAW), f = clamp(n - i0, 0, 1);
+    const off = lerp(drive.segX[i0], drive.segX[Math.min(DRAW + 1, i0 + 1)], f);
+    const s = CAM_DEPTH / zc;
+    return { x: W / 2 + s * (wx + off - g.lane) * 480, y: HORIZON + s * (drive.camH - wy) * 270, k: s * 480 };
+  }
+
+  function palArr(name) { return mix(PAL[name][0], PAL[name][1], dusk); }
+
+  function drawRoad3D(g) {
+    const base = Math.floor(g.dist / SEG);
+    drive.base = base;
+    const pct = (g.dist % SEG) / SEG;
+    const camH = drive.camH;
+    let x = 0, dx = -curveAt(base) * pct;
+    let maxy = H + 40;
+    const haze = palArr('skyLow');
+    const cols = {
+      f1: palArr('fieldTop'), f2: palArr('fieldLow'), v1: palArr('verge'), v2: palArr('vergeDark'),
+      r1: palArr('road'), r2: mix(palArr('road'), [0, 0, 0], 0.08), line: [255, 244, 196],
+    };
+    const proj = (z, xoff) => {
+      const s = CAM_DEPTH / (z - g.dist);
+      return { x: W / 2 + s * (xoff - g.lane) * 480, y: HORIZON + s * camH * 270, w: s * ROAD_W * 480 };
+    };
+    for (let n = 0; n <= DRAW; n++) {
+      const i = base + n, z1 = i * SEG, z2 = z1 + SEG;
+      drive.segX[n] = x;
+      const nx = x + dx;
+      if (z1 - g.dist > NEAR) {
+        const p1 = proj(z1, x), p2 = proj(z2, nx);
+        if (p2.y < maxy) {
+          const fog = Math.pow(n / DRAW, 1.4) * 0.85;
+          const c = (arr) => rgb(mix(arr, haze, fog));
+          const alt = Math.floor(i / 3) % 2;
+          const yTop = Math.max(p2.y, HORIZON), yBot = Math.min(p1.y, maxy);
+          ctx.fillStyle = c(alt ? cols.f1 : cols.f2);
+          ctx.fillRect(-W, yTop, W * 3, yBot - yTop + 1);
+          const quad = (x1, w1, x2, w2, color) => {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(x1 - w1, p1.y); ctx.lineTo(x2 - w2, p2.y); ctx.lineTo(x2 + w2, p2.y); ctx.lineTo(x1 + w1, p1.y);
+            ctx.closePath(); ctx.fill();
+          };
+          quad(p1.x, p1.w * 1.3, p2.x, p2.w * 1.3, c(alt ? cols.v1 : cols.v2));
+          quad(p1.x, p1.w, p2.x, p2.w, c(alt ? cols.r1 : cols.r2));
+          if (p1.w > 6) {
+            const lw1 = p1.w * 0.03, lw2 = p2.w * 0.03;
+            quad(p1.x - p1.w * 0.92, lw1, p2.x - p2.w * 0.92, lw2, c(cols.line));
+            quad(p1.x + p1.w * 0.92, lw1, p2.x + p2.w * 0.92, lw2, c(cols.line));
+            if (Math.floor(i / 4) % 2 === 0) quad(p1.x, lw1 * 0.9, p2.x, lw2 * 0.9, c([255, 214, 90]));
+          }
+          maxy = p2.y;
+        }
+      }
+      x = nx;
+      dx += curveAt(i);
+    }
+    drive.segX[DRAW + 1] = x;
+  }
+
+  // Roadside furniture, cattle, storms and debris, sorted far to near.
+  function collectSprites(g) {
+    const list = [];
+    const base = drive.base;
+    for (let n = DRAW - 3; n >= 1; n--) {
+      const i = base + n, z = i * SEG;
+      if (n < 120 && i % 2 === 0) { list.push({ z, kind: 'post', x: -ROAD_W * 1.32, side: -1 }); list.push({ z, kind: 'post', x: ROAD_W * 1.32, side: 1 }); }
+      if (i % 12 === 0) list.push({ z, kind: 'pole', x: ROAD_W * 2.3 });
+      if (n < 170 && hash(i * 3.3) > 0.955) {
+        const side = hash(i * 1.1) > 0.5 ? 1 : -1;
+        const x0 = side * (ROAD_W * 1.9 + hash(i * 2.7) * 7000);
+        const count = 1 + Math.floor(hash(i * 4.4) * 3);
+        for (let j = 0; j < count; j++) list.push({ z: z + j * 140, kind: 'cow', x: x0 + j * 300 * side, face: hash(i + j) > 0.5 ? 1 : -1, id: i * 7 + j });
+      }
+      if (hash(i * 5.1) > 0.94) list.push({ z, kind: 'tree', x: (hash(i * 5.7) > 0.5 ? 1 : -1) * (ROAD_W * 2.6 + hash(i * 6.6) * 16000), r: 60 + hash(i * 6.1) * 60 });
+      if (hash(i * 7.7) > 0.992) list.push({ z, kind: 'barn', x: (hash(i * 8.1) > 0.5 ? 1 : -1) * (6000 + hash(i * 8.8) * 14000) });
+      if (n < 45) for (const sd of [-1, 1]) list.push({ z: z + hash(i + sd) * SEG, kind: 'tuft', x: sd * (ROAD_W * 1.45 + hash(i * 9.1 + sd) * 3000) });
+    }
+    if (g.tor) list.push({ z: g.tor.z, kind: 'tornado' });
+    if (g.pickup) list.push({ z: g.pickup.z, kind: 'pickup', x: g.pickup.x });
+    for (const p of g.fpDebris) list.push({ z: p.z, kind: 'debris', p });
+    if (state === 'sunset' && g.picnic) list.push({ z: g.picnic.z, kind: 'picnic' });
+    list.sort((a, b) => b.z - a.z);
+    return list;
+  }
+
+  function drawSprites(g) {
+    const last = { '-1': null, 1: null };
+    let lastPole = null;
+    g.torScreen = null;
+    for (const sp of collectSprites(g)) {
+      if (sp.kind === 'tornado') { drawTornadoFP(g, g.tor); continue; }
+      if (sp.kind === 'debris') {
+        const q = spriteAt(sp.p.x, sp.p.y, sp.p.z);
+        if (!q || q.y > DASH_Y + 60) continue;
+        ctx.save(); ctx.translate(q.x, q.y); const k = clamp(q.k * 22, 0.08, 8); ctx.scale(k, k);
+        drawDebrisPiece(sp.p, g.t); ctx.restore();
+        continue;
+      }
+      if (sp.kind === 'picnic') { drawPicnicFP(g); continue; }
+      const p = spriteAt(sp.x, 0, sp.z);
+      if (!p) continue;
+      if (p.x < -400 || p.x > W + 400) { if (sp.kind === 'post') last[sp.side] = null; continue; }
+      const k = p.k;
+      switch (sp.kind) {
+        case 'post': {
+          const h = 260 * k, w = Math.max(1.5, 22 * k);
+          ctx.fillStyle = col('pole');
+          ctx.fillRect(p.x - w / 2, p.y - h, w, h);
+          const prev = last[sp.side];
+          if (prev) {
+            ctx.strokeStyle = 'rgba(70,66,78,0.9)';
+            ctx.lineWidth = Math.max(1, 4 * k);
+            ctx.beginPath();
+            for (const f of [0.35, 0.65, 0.92]) { ctx.moveTo(prev.x, prev.y - prev.h * f); ctx.lineTo(p.x, p.y - h * f); }
+            ctx.stroke();
+          }
+          last[sp.side] = { x: p.x, y: p.y, h };
+          break;
+        }
+        case 'pole': {
+          const h = 1500 * k, w = Math.max(2, 50 * k);
+          ctx.fillStyle = col('pole');
+          ctx.fillRect(p.x - w / 2, p.y - h, w, h);
+          ctx.fillRect(p.x - 160 * k, p.y - h * 0.94, 320 * k, Math.max(1.5, 30 * k));
+          if (lastPole) {
+            ctx.strokeStyle = 'rgba(60,46,60,0.75)';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            for (const o of [-130, 130]) {
+              ctx.moveTo(lastPole.x + o * lastPole.k, lastPole.y - lastPole.h * 0.94);
+              ctx.quadraticCurveTo((lastPole.x + p.x) / 2, (lastPole.y - lastPole.h * 0.94 + p.y - h * 0.94) / 2 + 30 * k, p.x + o * k, p.y - h * 0.94);
+            }
+            ctx.stroke();
+          }
+          lastPole = { x: p.x, y: p.y, h, k };
+          break;
+        }
+        case 'cow':
+          drawGrazingCow(p.x, p.y, k * 9, sp.face, g.t + hash(sp.id) * 50);
+          break;
+        case 'tree': {
+          const r = sp.r * k;
+          ctx.fillStyle = col('pole');
+          ctx.fillRect(p.x - 12 * k, p.y - (sp.r * 1.6) * k, 24 * k, sp.r * 1.6 * k);
+          puff(p.x, p.y - sp.r * 2.1 * k, r, col('treeLight'), col('tree'), col('hillShade'));
+          break;
+        }
+        case 'barn':
+          ctx.save(); ctx.translate(p.x, p.y); ctx.scale(k * 14, k * 14); drawBarn(0, 0); ctx.restore();
+          break;
+        case 'tuft': {
+          ctx.strokeStyle = col('wheat');
+          ctx.lineWidth = Math.max(1.5, 10 * k);
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          for (const a of [-0.5, 0, 0.5]) { ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + Math.sin(a) * 50 * k, p.y - Math.cos(a) * 70 * k); }
+          ctx.stroke();
+          break;
+        }
+        case 'pickup': {
+          const y = p.y - (260 + Math.sin(g.t * 3) * 40) * k;
+          ctx.save(); ctx.translate(p.x, y); const s = k * 10; ctx.scale(s, s); drawPickupAt(g.pickup.kind, 0, 0); ctx.restore();
+          break;
+        }
+      }
+    }
+  }
+
+  function drawTornadoFP(g, T) {
+    const gx = tornadoGroundX(T);
+    const p = spriteAt(gx, 0, T.z);
+    if (!p) return;
+    g.torScreen = { x: p.x, y: p.y, k: p.k };
+    const hs = clamp(p.k * 6, 0.05, 3.4);
+    const top = CLOUD_BASE - 20;
+    const vs = (p.y - top) / (TOR_GROUND - top);
+    if (vs <= 0) return;
+    // Lowering of the cloud above it
+    ctx.save();
+    ctx.globalAlpha = T.alpha;
+    ctx.translate(p.x - funnelAt(T, 0, g.t).xo * hs, CLOUD_BASE);
+    ctx.scale(clamp(hs, 0.3, 3.4), 1);
+    ctx.fillStyle = col('cloudShade');
+    ctx.beginPath();
+    ctx.moveTo(-210, -30); ctx.lineTo(-150, 4); ctx.lineTo(-90, 12); ctx.lineTo(-70, 26); ctx.lineTo(70, 26); ctx.lineTo(90, 12); ctx.lineTo(150, 4); ctx.lineTo(210, -30);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.translate(p.x - funnelAt(T, 1, g.t).xo * hs, top);
+    ctx.scale(hs, vs);
+    ctx.translate(0, -top);
+    drawTornado(T, T.x);
+    ctx.restore();
+  }
+
+  function drawPicnicFP(g) {
+    const p = spriteAt(g.picnic.x, 0, g.picnic.z);
+    if (!p) return;
+    const k = p.k * 15; // drawn a little larger than life so the toast reads
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.scale(k, k);
+    ctx.translate(-g.px, -(ROAD_Y - 14));
+    drawPicnic(g, 0);
+    ctx.restore();
+  }
+
+  // Rain on the glass, hail, splats and cracks.
+  function drawWeatherFP(g) {
+    if (g.rain > 0) {
+      ctx.fillStyle = col('rain', 0.45 * g.rain);
+      ctx.fillRect(-W, -H, W * 3, H * 3);
+      ctx.strokeStyle = `rgba(235,240,255,${0.35 * g.rain})`;
+      ctx.lineWidth = 2.5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < 80; i++) {
+        const rx = (i * 97 + g.t * 300) % W, ry = (i * 53 + g.t * 900) % DASH_Y;
+        ctx.moveTo(rx, ry); ctx.lineTo(rx - 6, ry + 22);
+      }
+      ctx.stroke();
+    }
+    for (const h of g.fpHail) puff(h.x, h.y, 4, '#ffffff', '#eef3ff', '#a9b8de');
+    for (const sp of g.splats) {
+      const a = clamp(sp.life, 0, 1);
+      if (sp.crack) {
+        ctx.strokeStyle = `rgba(240,248,255,${0.85 * a})`;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let k = 0; k < 7; k++) {
+          const ang = k * 0.9 + sp.seed;
+          let x = sp.x, y = sp.y;
+          ctx.moveTo(x, y);
+          for (let j = 1; j <= 3; j++) { x += Math.cos(ang + Math.sin(j + sp.seed) * 0.4) * sp.r * 0.6; y += Math.sin(ang + Math.sin(j + sp.seed) * 0.4) * sp.r * 0.6; ctx.lineTo(x, y); }
+        }
+        ctx.stroke();
+      } else {
+        ctx.fillStyle = `rgba(255,255,255,${0.7 * a})`;
+        ctx.beginPath();
+        for (let k = 0; k < 5; k++) { const ang = k * 1.256; ctx.moveTo(sp.x, sp.y); ctx.arc(sp.x + Math.cos(ang) * sp.r * 0.6, sp.y + Math.sin(ang) * sp.r * 0.6, sp.r * 0.3, 0, Math.PI * 2); }
+        ctx.fill();
+      }
+    }
+  }
+
+  // The inside of the Vibe: hood, pillars, mirror, dash, wheel and gauges.
+  function drawCockpit(g) {
+    const up = g.up, feral = isFeral(), t = g.t;
+    const bounce = Math.sin(t * 13) * Math.min(1.5, g.speed / 4000) * (up.tires ? 1.6 : 1);
+    ctx.save();
+    ctx.translate(0, bounce);
+
+    // Hood
+    ctx.beginPath();
+    ctx.moveTo(-20, DASH_Y + 6); ctx.quadraticCurveTo(W / 2, 384, W + 20, DASH_Y + 6); ctx.lineTo(W + 20, H); ctx.lineTo(-20, H); ctx.closePath();
+    const hood = ctx.createLinearGradient(0, 392, 0, DASH_Y);
+    hood.addColorStop(0, feral ? '#c4453a' : '#ff6a5a');
+    hood.addColorStop(1, feral ? '#6c1814' : '#b3141a');
+    ctx.fillStyle = hood; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(120, 428); ctx.quadraticCurveTo(W / 2, 396, W - 120, 428); ctx.stroke();
+    if (feral) {
+      ctx.fillStyle = 'rgba(132,70,30,0.6)';
+      for (const [rx, ry, r] of [[220, 432, 14], [650, 426, 11], [770, 436, 9]]) { ctx.beginPath(); ctx.ellipse(rx, ry, r * 1.6, r * 0.6, 0, 0, Math.PI * 2); ctx.fill(); }
+      // Spikes along the nose and a blower through the hood. The hood's edge
+      // is a quadratic curve, so this finds its height at any x.
+      const hoodEdge = (x) => { const u = (x + 20) / (W + 40); return DASH_Y + 6 - 136 * u * (1 - u); };
+      ctx.fillStyle = '#d6d4de';
+      for (let k = 0; k < 9; k++) {
+        const fx = 160 + k * 80, fy = hoodEdge(fx) + 3;
+        ctx.beginPath(); ctx.moveTo(fx - 9, fy); ctx.lineTo(fx, fy - 20); ctx.lineTo(fx + 9, fy); ctx.closePath(); ctx.fill();
+      }
+      const hb = hoodEdge(W / 2) + 14;
+      ctx.fillStyle = '#2e2c36'; ctx.fillRect(W / 2 - 46, hb - 40, 92, 40);
+      ctx.fillStyle = '#b8b6c4'; ctx.fillRect(W / 2 - 58, hb - 54, 116, 16);
+      ctx.fillStyle = '#e8e6f0'; ctx.fillRect(W / 2 - 58, hb - 54, 116, 4);
+      ctx.fillStyle = '#2e2c36'; for (let k = 0; k < 4; k++) ctx.fillRect(W / 2 - 48 + k * 26, hb - 51, 14, 10);
+      ctx.strokeStyle = '#6d6a7c'; ctx.lineWidth = 3;
+      const belt = (t * 60) % 12;
+      ctx.beginPath(); for (let by = hb - 36 + belt; by < hb - 2; by += 12) { ctx.moveTo(W / 2 - 40, by); ctx.lineTo(W / 2 + 40, by); } ctx.stroke();
+      // Flames from the side stacks
+      for (const fx of [26, W - 26]) {
+        const fl = 40 + Math.random() * 50;
+        ctx.fillStyle = '#ff8a2a';
+        ctx.beginPath(); ctx.moveTo(fx - 14, 430); ctx.lineTo(fx, 430 - fl); ctx.lineTo(fx + 14, 430); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#ffe36b';
+        ctx.beginPath(); ctx.moveTo(fx - 7, 430); ctx.lineTo(fx, 430 - fl * 0.55); ctx.lineTo(fx + 7, 430); ctx.closePath(); ctx.fill();
+      }
+    }
+
+    // Wipers in the rain
+    if (g.rain > 0.25) {
+      const sweep = 0.5 - 0.5 * Math.cos(t * 3.4);
+      const th = -0.12 - sweep * 1.9;
+      ctx.strokeStyle = '#1e1c24'; ctx.lineCap = 'round';
+      for (const px of [250, 590]) {
+        const ex = px + Math.cos(th) * 300, ey = DASH_Y + Math.sin(th) * 300;
+        ctx.lineWidth = 6; ctx.beginPath(); ctx.moveTo(px, DASH_Y); ctx.lineTo(ex, ey); ctx.stroke();
+        ctx.lineWidth = 9; ctx.beginPath(); ctx.moveTo(px + Math.cos(th) * 60, DASH_Y + Math.sin(th) * 60); ctx.lineTo(ex, ey); ctx.stroke();
+      }
+    }
+
+    // Window netting
+    if (up.nets) {
+      ctx.save();
+      ctx.beginPath(); ctx.moveTo(70, 22); ctx.lineTo(W - 70, 22); ctx.lineTo(W - 18, DASH_Y); ctx.lineTo(18, DASH_Y); ctx.closePath(); ctx.clip();
+      ctx.strokeStyle = 'rgba(28,26,34,0.22)'; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      for (let k = -H; k < W + H; k += 64) { ctx.moveTo(k, 0); ctx.lineTo(k + H, H); ctx.moveTo(k, H); ctx.lineTo(k + H, 0); }
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // Roof, pillars and the cage outside once feral
+    ctx.fillStyle = '#2a2632';
+    ctx.fillRect(-20, -20, W + 40, 42);
+    ctx.beginPath(); ctx.moveTo(-20, -20); ctx.lineTo(82, 22); ctx.lineTo(24, DASH_Y + 10); ctx.lineTo(-20, DASH_Y + 10); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(W + 20, -20); ctx.lineTo(W - 82, 22); ctx.lineTo(W - 24, DASH_Y + 10); ctx.lineTo(W + 20, DASH_Y + 10); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(-20, 16, W + 40, 6);
+    if (feral) {
+      ctx.fillStyle = '#3a3842'; ctx.fillRect(70, 22, W - 140, 10);
+      for (const lx of [150, W - 150]) {
+        ctx.fillStyle = '#2e2c36'; ctx.beginPath(); ctx.arc(lx, 30, 22, 0, Math.PI); ctx.fill();
+        ctx.fillStyle = '#fff4c0'; ctx.beginPath(); ctx.arc(lx, 32, 13, 0, Math.PI); ctx.fill();
+        if (dusk > 0.3) {
+          const beam = ctx.createLinearGradient(0, 40, 0, 330);
+          beam.addColorStop(0, `rgba(255,240,170,${0.25 * dusk})`); beam.addColorStop(1, 'rgba(255,240,170,0)');
+          ctx.fillStyle = beam;
+          ctx.beginPath(); ctx.moveTo(lx - 12, 40); ctx.lineTo(lx + 12, 40); ctx.lineTo(W / 2 + (lx - W / 2) * 0.2 + 90, 330); ctx.lineTo(W / 2 + (lx - W / 2) * 0.2 - 90, 330); ctx.closePath(); ctx.fill();
+        }
+      }
+      // Tattered flag off the left pillar
+      const wv = Math.sin(t * 9) * 6;
+      ctx.fillStyle = '#c0281f';
+      ctx.beginPath(); ctx.moveTo(60, 40); ctx.lineTo(118, 46 + wv); ctx.lineTo(100, 58 + wv * 0.5); ctx.lineTo(122, 70 + wv); ctx.lineTo(62, 74); ctx.closePath(); ctx.fill();
+    }
+
+    // Rear-view mirror with fuzzy dice
+    ctx.fillStyle = '#1e1c24';
+    ctx.fillRect(W / 2 - 4, 20, 8, 16);
+    pill(W / 2 - 72, 34, 144, 34); ctx.fill();
+    const mg = ctx.createLinearGradient(0, 38, 0, 64);
+    mg.addColorStop(0, col('skyLow')); mg.addColorStop(1, col('road'));
+    ctx.fillStyle = mg; pill(W / 2 - 66, 38, 132, 26); ctx.fill();
+    const swing = -g.steerVis * 0.8 + Math.sin(t * 3) * 0.12;
+    ctx.save();
+    ctx.translate(W / 2 + 30, 66);
+    ctx.rotate(swing);
+    ctx.strokeStyle = '#f2f1f7'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-8, 30); ctx.moveTo(0, 0); ctx.lineTo(9, 26); ctx.stroke();
+    for (const [dx, dy] of [[-8, 38], [9, 34]]) {
+      ctx.fillStyle = '#e8281f'; ctx.fillRect(dx - 9, dy - 9, 18, 18);
+      ctx.fillStyle = '#ffffff';
+      for (const [px, py] of [[-4, -4], [4, 4], [0, 0]]) { ctx.beginPath(); ctx.arc(dx + px, dy + py, 2, 0, Math.PI * 2); ctx.fill(); }
+    }
+    ctx.restore();
+
+    // Dashboard
+    ctx.beginPath();
+    ctx.moveTo(-20, DASH_Y - 8); ctx.lineTo(240, DASH_Y); ctx.quadraticCurveTo(W / 2, DASH_Y - 10, W - 240, DASH_Y); ctx.lineTo(W + 20, DASH_Y - 8);
+    ctx.lineTo(W + 20, H + 20); ctx.lineTo(-20, H + 20); ctx.closePath();
+    const dg = ctx.createLinearGradient(0, DASH_Y - 10, 0, H);
+    dg.addColorStop(0, '#45404f'); dg.addColorStop(1, '#1c1922');
+    ctx.fillStyle = dg; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.moveTo(-20, DASH_Y - 7); ctx.lineTo(240, DASH_Y + 1); ctx.quadraticCurveTo(W / 2, DASH_Y - 9, W - 240, DASH_Y + 1); ctx.lineTo(W + 20, DASH_Y - 7); ctx.stroke();
+
+    // Bobble-head cow on the dash
+    const bob = Math.sin(t * 7) * 3 + g.steerVis * 6;
+    ctx.save();
+    ctx.translate(730, DASH_Y - 2);
+    ctx.fillStyle = '#3a3440'; ctx.fillRect(-8, -4, 16, 6);
+    ctx.translate(0, -6);
+    ctx.scale(1.3, 1.3);
+    ctx.fillStyle = '#ffffff'; ctx.strokeStyle = '#3a3440'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.ellipse(0, -6, 10, 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#3a3440'; ctx.beginPath(); ctx.arc(-3, -7, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.translate(9, -12 + bob * 0.2);
+    ctx.rotate(bob * 0.04);
+    ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.ellipse(0, 0, 6, 5, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#ffb3c1'; ctx.beginPath(); ctx.ellipse(4, 2, 2.6, 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#3a3440'; ctx.fillRect(0, -2, 1.8, 1.8);
+    ctx.restore();
+
+    // Gauges
+    const gx = 300, gy = 486;
+    for (const [cx, r, v] of [[gx - 34, 26, g.speed / 9000], [gx + 36, 20, 0.25 + 0.6 * (g.speed / 9000) + Math.sin(t * 20) * 0.02]]) {
+      ctx.fillStyle = '#141018'; ctx.beginPath(); ctx.arc(cx, gy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#8f8c9c'; ctx.lineWidth = 2; ctx.stroke();
+      ctx.strokeStyle = '#d6d4de'; ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      for (let k = 0; k <= 8; k++) { const a = Math.PI * 0.75 + k / 8 * Math.PI * 1.5; ctx.moveTo(cx + Math.cos(a) * r * 0.75, gy + Math.sin(a) * r * 0.75); ctx.lineTo(cx + Math.cos(a) * r * 0.92, gy + Math.sin(a) * r * 0.92); }
+      ctx.stroke();
+      const a = Math.PI * 0.75 + clamp(v, 0, 1) * Math.PI * 1.5;
+      ctx.strokeStyle = '#ff4a3d'; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.moveTo(cx, gy); ctx.lineTo(cx + Math.cos(a) * r * 0.85, gy + Math.sin(a) * r * 0.85); ctx.stroke();
+    }
+    ctx.font = `20px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    ctx.fillStyle = '#ffe680';
+    ctx.fillText(`${Math.round(g.speed / 9000 * 95)}`, gx - 34, gy + 30);
+
+    // Radar scope on the dash
+    if (up.radar) {
+      const cx = 560, cy = 492, R = 36;
+      ctx.fillStyle = '#0d2a1c'; ctx.beginPath(); ctx.arc(cx, cy, R, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(125,255,138,0.35)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(cx, cy, R * 0.5, 0, Math.PI * 2); ctx.moveTo(cx - R, cy); ctx.lineTo(cx + R, cy); ctx.moveTo(cx, cy - R); ctx.lineTo(cx, cy + R); ctx.stroke();
+      const sa = t * 2.5;
+      ctx.strokeStyle = 'rgba(125,255,138,0.8)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sa) * R, cy + Math.sin(sa) * R); ctx.stroke();
+      const blip = (wx, wz, color, r) => {
+        const bx = (wx - g.lane) / 25000 * R, by = -(wz - g.dist) / 25000 * R;
+        if (Math.hypot(bx, by) > R - 2) return;
+        ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + bx, cy + by, r, 0, Math.PI * 2); ctx.fill();
+      };
+      if (g.tor) blip(tornadoGroundX(g.tor), g.tor.z, '#ff4a3d', 4 + g.tor.ef * 0.6);
+      if (g.pickup) blip(g.pickup.x, g.pickup.z, '#ffe680', 3);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(cx - 2, cy - 2, 4, 4);
+    }
+
+    // Steering wheel
+    ctx.save();
+    ctx.translate(gx, 600);
+    ctx.rotate(g.steerVis);
+    ctx.strokeStyle = '#26222e'; ctx.lineWidth = 24;
+    ctx.beginPath(); ctx.arc(0, 0, 128, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 134, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    ctx.strokeStyle = '#26222e'; ctx.lineWidth = 18;
+    ctx.beginPath(); ctx.moveTo(-124, 0); ctx.lineTo(124, 0); ctx.stroke();
+    ctx.restore();
+
+    ctx.restore();
+
+    // Red edges when the car takes a hit
+    if (g.car.hurt > 0) {
+      const a = g.car.hurt / 0.25 * 0.35;
+      const v = ctx.createRadialGradient(W / 2, H / 2, H * 0.4, W / 2, H / 2, H);
+      v.addColorStop(0, 'rgba(255,40,30,0)'); v.addColorStop(1, `rgba(255,40,30,${a})`);
+      ctx.fillStyle = v; ctx.fillRect(-W, -H, W * 3, H * 3);
+    }
+  }
+
+  // The whole world pass for windshield mode.
+  function drawDriveWorld(g) {
+    drive.camH = g.up.tires ? 1250 : 1000;
+    const bg = g.bgCam;
+    drawSky(g);
+    if (state === 'sunset') drawStars(g);
+    ctx.save();
+    if (state === 'sunset') ctx.translate(0, -g.cloudLift);
+    drawStormCloud(bg, null);
+    ctx.restore();
+    drawLightning(g, 0);
+    drawHills(bg);
+    drawRoad3D(g);
+    drawSprites(g);
+    drawWeatherFP(g);
+    drawCockpit(g);
+  }
+
+  // Off-screen indicator position and distance, shared by both modes.
+  function tornadoZX(T) {
+    if (game.mode !== 'drive') return screenXOf(tornadoGroundX(T));
+    const ts = game.torScreen;
+    if (!ts || T.z < game.dist + NEAR) return tornadoGroundX(T) < game.lane ? -100 : W + 100;
+    return W / 2 + (ts.x - zoomFocus()) * game.zoom;
+  }
+  function tornadoMiles(T) {
+    return game.mode === 'drive' ? driveMiles(T) : Math.abs(game.car.x - tornadoGroundX(T)) * MI_PER_PX;
   }
 
   // ---------------------------------------------------------------- loop
-  game = newGame();
-  spawnTornado(0);
-  game.tor.x = 260; game.tor.phase = 'mature'; game.tor.alpha = 1; game.tor.life = 1e9; game.tor.core = 1;
+  titleDemo(selMode);
 
   let last = performance.now();
   function frame(now) {
@@ -2565,6 +3393,7 @@
     else if (state !== 'paused') update(dt);
     draw();
     if (document.body.dataset.state !== state) document.body.dataset.state = state;
+    if (document.body.dataset.mode !== game.mode) document.body.dataset.mode = game.mode;
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
