@@ -13,10 +13,11 @@
   <meta name="twitter:card" content="summary">
   <meta name="theme-color" content="#000000">
 
-  <link rel="stylesheet" href="curtismiller.css">
+  <link rel="preload" href="fonts/eb-garamond.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="curtismiller.css?v=5">
 
-<link rel="preconnect" href="https://fonts.gstatic.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200;300;400;500;600;700&family=Press+Start+2P&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <link rel="icon" type="image/png" href=""/>
 
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
@@ -28,7 +29,7 @@
     image-rendering: pixelated; image-rendering: crisp-edges;
     touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; outline: none;
   }
-  #game-wrap p.howto { max-width: 100%; text-align: center; font-size: 12px; font-weight: 300; color: #555; }
+  #game-wrap p.howto { max-width: 100%; text-align: center; font-size: 0.85rem; color: var(--muted, #666); }
   .controls, #rotate { display: none; }
 
   /* ---- Phones and tablets ---- */
@@ -98,7 +99,7 @@
     #rotate { display: flex; }
   }
   @media (pointer: coarse) and (orientation: landscape) {
-    header, #game-wrap p.howto, body > br { display: none; }
+    .site-header, .site-footer, #game-wrap p.howto { display: none; }
     body { margin: 0; background: black; overflow: hidden; height: 100vh; height: 100dvh; }
     #game-wrap {
       position: fixed; inset: 0; max-width: none; margin: 0; background: black;
@@ -111,10 +112,15 @@
 
 </head>
 
-  <header><a href="index.html">INFO</a> / <a href="films.html">FILMS</a> / <a href="photo.html">PHOTO</a></header>
+<body>
 
-    <body>
-      <br>
+<header class="site-header">
+  <a class="site-name" href="index.html">Curtis Miller</a>
+  <nav class="site-nav">
+    <a href="index.html">Info</a><a href="films.html">Films</a><a href="photo.html">Photo</a>
+  </nav>
+</header>
+
       <div id="game-wrap">
         <canvas id="game" width="960" height="540" tabindex="0" aria-label="A Dinner Date with the Sublime, a storm chasing game"></canvas>
         <div class="controls" aria-hidden="true">
@@ -139,10 +145,10 @@
       </div>
 
       <script src="game.js"></script>
-    </body>
 
-    <footer>
-
-    </footer>
-
+<footer class="site-footer">
+  <span>© Curtis Miller</span>
+  <span>miller.is.curt (at) gmail (dot) com</span>
+</footer>
+</body>
 </html>
