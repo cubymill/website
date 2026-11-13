@@ -338,6 +338,17 @@ main {
   display: block;
 }
 
+/* Home page footer: name, tornado icon in the middle, email */
+.site-footer--centre {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+
+.site-footer--centre > :last-child {
+  text-align: right;
+}
+
 /* ---------- Tablet and up ---------- */
 
 @media (min-width: 640px) {
